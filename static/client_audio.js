@@ -59,11 +59,14 @@
     let prefetchInFlightUrl = "";
     let previousVolumeBeforeMute = 70;
     let isOriginalMode = false;
+    let failedPlaylistEntryIndexes = new Set();
     let playbackMonitorNode = null;
     let playbackMonitorCleanup = null;
     let playbackMonitorTimer = null;
     let playbackSessionToken = 0;
     let hasPrimedAudioSession = false;
+    let audioKeepAliveNode = null;
+    let audioKeepAliveGain = null;
 
     const {
       getLayerBlend,
@@ -215,6 +218,7 @@
 
     function seedPlaylistEntries(entries = []) {
       playlistEntryCache = {};
+      failedPlaylistEntryIndexes = new Set();
       if (!Array.isArray(entries)) {
         updateTrackThumbnail(null);
         return;
@@ -225,6 +229,84 @@
           playlistEntryCache[index] = entry;
         }
       });
+    }
+
+    function clearPlaylistEntryFailure(index) {
+      failedPlaylistEntryIndexes.delete(index);
+    }
+
+    function markPlaylistEntryFailed(index, error) {
+      if (index === null || index === undefined) {
+        return;
+      }
+      failedPlaylistEntryIndexes.add(index);
+      console.warn("playlist entry skipped", { index, error });
+    }
+
+    function getStepwiseOrderPosition(startPosition, direction, stepOffset) {
+      if (!playOrder.length) {
+        return null;
+      }
+
+      let nextOrderPosition = startPosition + direction * stepOffset;
+      if (playlistLoopInput.checked) {
+        nextOrderPosition %= playOrder.length;
+        if (nextOrderPosition < 0) {
+          nextOrderPosition += playOrder.length;
+        }
+        return nextOrderPosition;
+      }
+
+      if (nextOrderPosition < 0 || nextOrderPosition >= playOrder.length) {
+        return null;
+      }
+
+      return nextOrderPosition;
+    }
+
+    async function switchToAdjacentPlayableTrack(direction, labels) {
+      if (!playlistCount || playlistCount <= 1 || !playOrder.length) {
+        return { ok: false, reason: "unavailable" };
+      }
+
+      const attemptedIndexes = new Set();
+      const maxAttempts = playOrder.length;
+
+      for (let stepOffset = 1; stepOffset <= maxAttempts; stepOffset += 1) {
+        const orderPosition = getStepwiseOrderPosition(currentOrderPosition, direction, stepOffset);
+        if (orderPosition === null) {
+          break;
+        }
+
+        const entryIndex = playOrder[orderPosition];
+        if (attemptedIndexes.has(entryIndex) || failedPlaylistEntryIndexes.has(entryIndex)) {
+          continue;
+        }
+        attemptedIndexes.add(entryIndex);
+
+        try {
+          const entry = await ensurePlaylistEntry(entryIndex);
+          if (!entry || !entry.url) {
+            throw new Error("entry unavailable");
+          }
+
+          await ensureAudioContext({ primeSession: true });
+          setStatus(`<strong>${labels.loading}</strong> ${entry.title}`, true);
+          await loadPreparedEntry(entry, entryIndex, 0);
+          clearPlaylistEntryFailure(entryIndex);
+          currentOrderPosition = orderPosition;
+          playCurrentBuffer(0);
+          setStatus(`<strong>${labels.success}</strong> ${entry.title}`);
+          return { ok: true, entryIndex };
+        } catch (error) {
+          markPlaylistEntryFailed(entryIndex, error);
+        }
+      }
+
+      return {
+        ok: false,
+        reason: attemptedIndexes.size ? "exhausted" : "end",
+      };
     }
 
     function applyCurrentVolumeToOutput() {
@@ -288,6 +370,40 @@
         }
       };
       hasPrimedAudioSession = true;
+    }
+
+    function ensureAudioKeepAlive() {
+      if (!audioContext || audioKeepAliveNode || typeof audioContext.createConstantSource !== "function") {
+        return;
+      }
+
+      const keepAliveNode = audioContext.createConstantSource();
+      const keepAliveGain = audioContext.createGain();
+      keepAliveNode.offset.value = 0;
+      keepAliveGain.gain.value = 1;
+      keepAliveNode.connect(keepAliveGain);
+      keepAliveGain.connect(audioContext.destination);
+      keepAliveNode.start();
+
+      audioKeepAliveNode = keepAliveNode;
+      audioKeepAliveGain = keepAliveGain;
+    }
+
+    async function restorePlaybackSession() {
+      if (!isPlaying || !audioContext) {
+        return;
+      }
+
+      try {
+        await ensureAudioContext();
+      } catch (error) {
+        console.warn("audio context resume skipped", error);
+      }
+
+      if (!progressAnimationFrame) {
+        startProgressLoop();
+      }
+      updatePlaybackUI(getCurrentPlaybackPosition());
     }
 
     function handlePlaybackCompletion() {
@@ -782,6 +898,7 @@
       if (options.primeSession) {
         primeAudioSession();
       }
+      ensureAudioKeepAlive();
       applyCurrentMasterBusProfile();
       setOutputVolume(clamp(parseNumberInput(playerVolumeInput, 70), 0, 100) / 100, audioContext);
     }
@@ -1011,6 +1128,9 @@
       }
 
       const nextEntryIndex = playOrder[nextOrderPosition];
+      if (failedPlaylistEntryIndexes.has(nextEntryIndex)) {
+        return;
+      }
       const nextEntry = await ensurePlaylistEntry(nextEntryIndex);
       if (!nextEntry || !nextEntry.url || nextEntry.url === currentTrackUrl) {
         return;
@@ -1049,6 +1169,7 @@
         currentBuffer = await loadAudioBuffer(prepared.id);
       }
       currentTrackId = prepared.id;
+      clearPlaylistEntryFailure(entryIndex);
       updateTrackThumbnail(entry);
       updateMetaText(entry.title || prepared.title, entryIndex);
       refreshPlaylistSelect();
@@ -1070,6 +1191,27 @@
       isAdvancingTrack = true;
       setBusy(true);
       try {
+        const result = await switchToAdjacentPlayableTrack(1, {
+          loading: "\uB2E4\uC74C \uACE1 \uC900\uBE44 \uC911...",
+          success: "\uB2E4\uC74C \uACE1 \uC7AC\uC0DD:",
+        });
+        if (result.ok) {
+          return;
+        }
+
+        playbackOffset = currentBuffer ? currentBuffer.duration : 0;
+        updatePlaybackUI(playbackOffset);
+        isPlaying = false;
+        setPlayButtonState();
+
+        if (!playlistLoopInput.checked && result.reason === "end") {
+          setStatus("<strong>\uC7AC\uC0DD\uBAA9\uB85D \uC885\uB8CC</strong> \uB9C8\uC9C0\uB9C9 \uACE1\uAE4C\uC9C0 \uC7AC\uC0DD\uD588\uC2B5\uB2C8\uB2E4.");
+          return;
+        }
+
+        setStatus("<strong>\uC7AC\uC0DD \uAC00\uB2A5\uD55C \uB2E4\uC74C \uACE1 \uC5C6\uC74C</strong> \uBD88\uB7EC\uC62C \uC218 \uC788\uB294 \uB2E4\uC74C \uACE1\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+        return;
+
         let nextOrderPosition = currentOrderPosition + 1;
         if (nextOrderPosition >= playOrder.length) {
           if (!playlistLoopInput.checked) {
@@ -1289,6 +1431,30 @@
       isAdvancingTrack = true;
       try {
         stopPlayback();
+        const result = await switchToAdjacentPlayableTrack(direction, {
+          loading: direction < 0 ? "\uC774\uC804 \uACE1 \uC900\uBE44 \uC911..." : "\uB2E4\uC74C \uACE1 \uC900\uBE44 \uC911...",
+          success: direction < 0 ? "\uC774\uC804 \uACE1 \uC7AC\uC0DD" : "\uB2E4\uC74C \uACE1 \uC7AC\uC0DD",
+        });
+        if (result.ok) {
+          return;
+        }
+
+        if (result.reason === "end") {
+          setStatus(
+            direction < 0
+              ? "<strong>\uCC98\uC74C \uACE1</strong> \uB354 \uC774\uC804 \uACE1\uC774 \uC5C6\uC2B5\uB2C8\uB2E4."
+              : "<strong>\uB9C8\uC9C0\uB9C9 \uACE1</strong> \uB354 \uB2E4\uC74C \uACE1\uC774 \uC5C6\uC2B5\uB2C8\uB2E4."
+          );
+          return;
+        }
+
+        setStatus(
+          direction < 0
+            ? "<strong>\uC774\uC804 \uACE1 \uC5C6\uC74C</strong> \uC7AC\uC0DD \uAC00\uB2A5\uD55C \uC774\uC804 \uACE1\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4."
+            : "<strong>\uB2E4\uC74C \uACE1 \uC5C6\uC74C</strong> \uC7AC\uC0DD \uAC00\uB2A5\uD55C \uB2E4\uC74C \uACE1\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4."
+        );
+        return;
+
         let nextOrderPosition = currentOrderPosition + direction;
         if (nextOrderPosition < 0) {
           nextOrderPosition = playlistLoopInput.checked ? playOrder.length - 1 : 0;
@@ -1450,6 +1616,18 @@
       rebuildPlayOrder(currentEntryIndex);
       prefetchUpcomingTrack().catch((error) => {
         console.warn("prefetch queue failed", error);
+      });
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        restorePlaybackSession().catch((error) => {
+          console.warn("visibility restore skipped", error);
+        });
+      }
+    });
+    window.addEventListener("pageshow", () => {
+      restorePlaybackSession().catch((error) => {
+        console.warn("pageshow restore skipped", error);
       });
     });
     shutdownButton.addEventListener("click", async () => {

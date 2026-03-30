@@ -17,6 +17,7 @@ CACHE_DIR = BASE_DIR / "cache"
 CACHE_DIR.mkdir(exist_ok=True)
 MAX_CACHE_BYTES = 500 * 1024 * 1024
 MAX_CACHE_AGE_HOURS = 24
+CACHE_PRUNE_TARGET_RATIO = 0.7
 
 DOWNLOAD_LOCK = threading.Lock()
 TRACKS: dict[str, dict[str, str]] = {}
@@ -263,8 +264,17 @@ def prune_cache(max_age_hours: int = MAX_CACHE_AGE_HOURS, max_cache_bytes: int =
     if total_size <= max_cache_bytes:
         return
 
-    for entry in sorted(collect_cache_entries(), key=lambda item: (float(item["atime"]), float(item["mtime"]))):
-        if total_size <= max_cache_bytes:
+    target_cache_bytes = min(
+        max_cache_bytes,
+        max(0, int(max_cache_bytes * CACHE_PRUNE_TARGET_RATIO)),
+    )
+    entries = sorted(
+        collect_cache_entries(),
+        key=lambda item: max(float(item["atime"]), float(item["mtime"])),
+    )
+
+    for entry in entries:
+        if total_size <= target_cache_bytes:
             break
         if entry["active"]:
             continue
