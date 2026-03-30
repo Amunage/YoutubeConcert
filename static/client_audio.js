@@ -1202,7 +1202,7 @@
         }
       }
 
-      await ensureAudioContext();
+      await ensureAudioContext({ primeSession: true });
       playbackSettings = readPlaybackSettings();
       renderTracks(
         playbackSettings.count,
@@ -1253,7 +1253,7 @@
       }
 
       if (isPlaying) {
-        await ensureAudioContext();
+        await ensureAudioContext({ primeSession: true });
         const currentPosition = getCurrentPlaybackPosition();
         playCurrentBuffer(currentPosition);
       } else {
@@ -1308,7 +1308,7 @@
           return;
         }
 
-        await ensureAudioContext();
+        await ensureAudioContext({ primeSession: true });
         setStatus(
           `<strong>${direction < 0 ? "이전 곡" : "다음 곡"} 준비 중...</strong> ${entry.title}`,
           true
@@ -1360,6 +1360,7 @@
             return;
           }
           await ensureAudioContext();
+          primeAudioSession();
           setStatus(`<strong>곡 준비 중..</strong> ${entry.title}`, true);
           await loadPreparedEntry(entry, selectedIndex, 0);
           playCurrentBuffer(0);
@@ -1411,6 +1412,7 @@
 
       try {
         await ensureAudioContext();
+        primeAudioSession();
         const nextSettings = readPlaybackSettings();
         const seekSeconds = (Number(playbackSlider.value) / 1000) * currentBuffer.duration;
         if (!arePlaybackSettingsEqual(playbackSettings, nextSettings)) {
