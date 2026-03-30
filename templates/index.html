@@ -272,6 +272,17 @@
       font-weight: 800;
     }
 
+    .icon-button svg {
+      width: 18px;
+      height: 18px;
+      display: block;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
     .icon-button.active {
       background: linear-gradient(180deg, #dd8c57, #b56739);
       color: #fff9f4;
@@ -332,6 +343,17 @@
       color: var(--text);
       font-size: 1rem;
       font-weight: 800;
+    }
+
+    .toggle-row .chip svg {
+      width: 18px;
+      height: 18px;
+      display: block;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
 
     .toggle-row .chip.active {
@@ -544,16 +566,35 @@
             <div class="spacer"></div>
 
             <div class="toggle-row">
-              <label id="loopChip" class="chip" for="loopPlayback">
+              <label id="loopChip" class="chip" for="loopPlayback" title="현재 곡 반복" aria-label="현재 곡 반복">
                 <input id="loopPlayback" type="checkbox">
-                <span>반복</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M17 2l4 4-4 4"></path>
+                  <path d="M3 11V9a3 3 0 0 1 3-3h15"></path>
+                  <path d="M7 22l-4-4 4-4"></path>
+                  <path d="M21 13v2a3 3 0 0 1-3 3H3"></path>
+                </svg>
+                <span class="visually-hidden">반복</span>
               </label>
               <input id="playlistLoop" type="checkbox" checked class="visually-hidden">
-              <label id="shuffleChip" class="chip" for="shufflePlayback">
+              <label id="shuffleChip" class="chip" for="shufflePlayback" title="셔플" aria-label="셔플">
                 <input id="shufflePlayback" type="checkbox">
-                <span>셔플</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M16 3h5v5"></path>
+                  <path d="M4 4l6 6"></path>
+                  <path d="M14 14l7 7"></path>
+                  <path d="M21 3l-7 7"></path>
+                  <path d="M4 20l5-5"></path>
+                  <path d="M16 21h5v-5"></path>
+                </svg>
+                <span class="visually-hidden">셔플</span>
               </label>
-              <button id="originalToggleButton" class="icon-button" type="button" title="원본 모드">⏻</button>
+              <button id="originalToggleButton" class="icon-button" type="button" title="원본 모드" aria-label="원본 모드">
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M12 3v7"></path>
+                  <path d="M7.05 5.05a9 9 0 1 0 9.9 0"></path>
+                </svg>
+              </button>
             </div>
           </div>
         </div>

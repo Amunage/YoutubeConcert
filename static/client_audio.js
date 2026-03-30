@@ -112,16 +112,12 @@
 
     function normalizeToggleLabels() {
       if (loopChip) {
-        loopChip.title = "현재 곡 반복";
-        Array.from(loopChip.querySelectorAll("span")).forEach((node, index) => {
-          node.textContent = index === 0 ? "↻" : "";
-        });
+        loopChip.title = "\uD604\uC7AC \uACE1 \uBC18\uBCF5";
+        loopChip.setAttribute("aria-label", "\uD604\uC7AC \uACE1 \uBC18\uBCF5");
       }
       if (shuffleChip) {
-        shuffleChip.title = "셔플";
-        Array.from(shuffleChip.querySelectorAll("span")).forEach((node, index) => {
-          node.textContent = index === 0 ? "⤮" : "";
-        });
+        shuffleChip.title = "\uC154\uD50C";
+        shuffleChip.setAttribute("aria-label", "\uC154\uD50C");
       }
     }
 
@@ -309,7 +305,7 @@
         playbackOffset = 0;
         updatePlaybackUI(0);
         playCurrentBuffer(0);
-        setStatus("<strong>?꾩옱 怨?諛섎났</strong>?쇰줈 泥섏쓬遺???ㅼ떆 ?쒖옉?덉뒿?덈떎.");
+        setStatus("<strong>현재 곡 반복</strong>으로 처음부터 다시 시작했습니다.");
         return;
       }
 
@@ -328,7 +324,7 @@
       updatePlaybackUI(0);
       isPlaying = false;
       setPlayButtonState();
-      setStatus("<strong>?ъ깮 ?꾨즺</strong> 泥섏쓬 ?꾩튂濡??뚯븘媛붿뒿?덈떎.");
+      setStatus("<strong>재생 완료</strong> 현재 곡이 끝났습니다.");
     }
 
     function schedulePlaybackCompletionMonitor(sessionToken) {
