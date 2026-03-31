@@ -224,9 +224,9 @@
           }
 
           setStatus(`<strong>${labels.loading}</strong> ${entry.title}`, true);
+          currentOrderPosition = orderPosition;
           await loadPreparedEntry(entry, entryIndex, 0);
           clearPlaylistEntryFailure(entryIndex);
-          currentOrderPosition = orderPosition;
           playCurrentBuffer(0);
           setStatus(`<strong>${labels.success}</strong> ${entry.title}`);
           return { ok: true, entryIndex };
@@ -328,33 +328,23 @@
 
     async function loadPreparedEntry(entry, entryIndex, offsetSeconds = 0) {
       const prepared = await fetchPreparedTrack(entry.url);
-      currentTrackUrl = entry.url;
-      if (prefetchedTrackUrl === currentTrackUrl) {
+      if (prefetchedTrackUrl === entry.url) {
         prefetchedTrackUrl = "";
       }
 
       if (prefetchedBufferTrackId === prepared.id && prefetchedBufferTrackUrl === entry.url && prefetchedAudioBuffer) {
-        currentBuffer = prefetchedAudioBuffer;
+        applyLoadedTrackState(entry, prepared, prefetchedAudioBuffer, entryIndex, offsetSeconds);
         clearPrefetchedAudioBuffer();
-      } else if (!currentBuffer || currentTrackId !== prepared.id) {
-        currentBuffer = await loadAudioBuffer(prepared.id);
-      } else if (prefetchedBufferTrackUrl === entry.url) {
+      } else {
+        let nextBuffer = currentBuffer;
+        if (!currentBuffer || currentTrackId !== prepared.id) {
+          nextBuffer = await loadAudioBuffer(prepared.id);
+        }
+        applyLoadedTrackState(entry, prepared, nextBuffer, entryIndex, offsetSeconds);
+      }
+      if (prefetchedBufferTrackUrl === entry.url) {
         clearPrefetchedAudioBuffer();
       }
-      currentTrackId = prepared.id;
-      clearPlaylistEntryFailure(entryIndex);
-      updateTrackThumbnail(entry);
-      updateMetaText(entry.title || prepared.title, entryIndex);
-      updateMediaSessionMetadata(entry);
-      refreshPlaylistSelect();
-      playbackOffset = offsetSeconds;
-      updatePlaybackUI(offsetSeconds);
-      playbackSlider.disabled = false;
-      queueMicrotask(() => {
-        prefetchUpcomingTrack().catch((error) => {
-          console.warn("prefetch queue failed", error);
-        });
-      });
     }
 
     async function advanceToNextTrack() {

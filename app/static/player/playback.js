@@ -34,6 +34,131 @@
       cleanup(stopSource);
     }
 
+    function addDeferredPlaybackTask(cleanup) {
+      if (typeof cleanup === "function") {
+        deferredPlaybackTaskCleanups.push(cleanup);
+      }
+    }
+
+    function clearDeferredPlaybackTasks(stopSource = true) {
+      if (!deferredPlaybackTaskCleanups.length) {
+        return;
+      }
+
+      deferredPlaybackTaskCleanups.forEach((cleanup) => {
+        try {
+          cleanup(stopSource);
+        } catch (error) {
+        }
+      });
+      deferredPlaybackTaskCleanups = [];
+    }
+
+    function scheduleContextTask(targetTime, callback) {
+      if (!audioContext) {
+        return () => {};
+      }
+
+      if (typeof audioContext.createConstantSource === "function") {
+        const markerSource = audioContext.createConstantSource();
+        const markerGain = audioContext.createGain();
+        markerSource.offset.value = 0;
+        markerGain.gain.value = 0;
+        markerSource.connect(markerGain);
+        markerGain.connect(audioContext.destination);
+        markerSource.onended = () => {
+          try {
+            callback();
+          } finally {
+            try {
+              markerSource.disconnect();
+            } catch (error) {
+            }
+            try {
+              markerGain.disconnect();
+            } catch (error) {
+            }
+          }
+        };
+        markerSource.start(Math.max(audioContext.currentTime, targetTime - 0.02));
+        markerSource.stop(Math.max(audioContext.currentTime + 0.01, targetTime));
+        return (stopSource = true) => {
+          markerSource.onended = null;
+          if (stopSource) {
+            try {
+              markerSource.stop();
+            } catch (error) {
+            }
+          }
+          try {
+            markerSource.disconnect();
+          } catch (error) {
+          }
+          try {
+            markerGain.disconnect();
+          } catch (error) {
+          }
+        };
+      }
+
+      const timeoutMs = Math.max(0, Math.ceil((targetTime - audioContext.currentTime) * 1000));
+      const timer = window.setTimeout(callback, timeoutMs);
+      return (stopSource = true) => {
+        if (stopSource) {
+          clearTimeout(timer);
+        }
+      };
+    }
+
+    function clearScheduledTrackTransition(stopSource = true) {
+      if (!scheduledTrackTransitionCleanup) {
+        scheduledTrackTransition = null;
+        return;
+      }
+
+      const cleanup = scheduledTrackTransitionCleanup;
+      scheduledTrackTransitionCleanup = null;
+      scheduledTrackTransition = null;
+      cleanup(stopSource);
+    }
+
+    function cleanupPlaybackGroup(groupId, stopSources = true) {
+      if (!groupId) {
+        return;
+      }
+
+      const retainedNodes = [];
+      activeNodes.forEach(({ groupId: nodeGroupId, source, cleanup, ...rest }) => {
+        if (nodeGroupId !== groupId) {
+          retainedNodes.push({ groupId: nodeGroupId, source, cleanup, ...rest });
+          return;
+        }
+
+        if (stopSources && source) {
+          try {
+            source.stop();
+          } catch (error) {
+          }
+        }
+
+        if (typeof cleanup === "function") {
+          cleanup();
+        }
+      });
+      activeNodes = retainedNodes;
+    }
+
+    function schedulePlaybackGroupCleanup(groupId, targetTime) {
+      if (!groupId || !audioContext) {
+        return;
+      }
+
+      const cleanup = scheduleContextTask(targetTime, () => {
+        cleanupPlaybackGroup(groupId, true);
+      });
+      addDeferredPlaybackTask(cleanup);
+    }
+
     function primeAudioSession() {
       if (!audioContext || hasPrimedAudioSession || audioContext.state !== "running") {
         return;
@@ -76,6 +201,12 @@
     }
 
     async function restorePlaybackSession() {
+      const currentEntry = getCurrentPlaylistEntry();
+      if (currentEntry) {
+        updateTrackThumbnail(currentEntry, { forceReload: true });
+        updateMediaSessionMetadata(currentEntry);
+      }
+
       if (!isPlaying || !audioContext) {
         return;
       }
@@ -93,6 +224,10 @@
     }
 
     function handlePlaybackCompletion() {
+      if (scheduledTrackTransition) {
+        return;
+      }
+
       if (!currentBuffer) {
         return;
       }
@@ -365,6 +500,25 @@
       activeNodes = [];
     }
 
+    function applyLoadedTrackState(entry, prepared, buffer, entryIndex, offsetSeconds = 0) {
+      currentTrackUrl = entry.url;
+      currentTrackId = prepared.id;
+      currentBuffer = buffer;
+      clearPlaylistEntryFailure(entryIndex);
+      updateTrackThumbnail(entry);
+      updateMetaText(entry.title || prepared.title, entryIndex);
+      updateMediaSessionMetadata(entry);
+      refreshPlaylistSelect();
+      playbackOffset = offsetSeconds;
+      updatePlaybackUI(offsetSeconds);
+      playbackSlider.disabled = false;
+      queueMicrotask(() => {
+        prefetchUpcomingTrack().catch((error) => {
+          console.warn("prefetch queue failed", error);
+        });
+      });
+    }
+
     function startProgressLoop() {
       stopProgressLoop();
 
@@ -392,12 +546,15 @@
       playbackSessionToken += 1;
       stopProgressLoop();
       clearPlaybackCompletionMonitor();
+      clearScheduledTrackTransition();
+      clearDeferredPlaybackTasks();
       cleanupActivePlaybackGraph(true);
       if (audioContext) {
         syncSharedEffectBusUsage([], audioContext);
       }
       playbackEndTime = 0;
       playbackTailSeconds = 0;
+      currentPlaybackGraphId = 0;
       isPlaying = false;
       setPlayButtonState();
     }
@@ -445,37 +602,16 @@
       };
     }
 
-    function playCurrentBuffer(offsetSeconds = 0, options = {}) {
-      if (!audioContext || !currentBuffer || !playbackSettings) {
-        return;
-      }
-
-      const shouldCrossfade = Boolean(options.crossfadeFromCurrent) && isPlaying && activeNodes.length > 0;
-      const previousNodes = shouldCrossfade ? activeNodes : [];
-
-      playbackSessionToken += 1;
-      stopProgressLoop();
-      clearPlaybackCompletionMonitor(false);
-      if (shouldCrossfade) {
-        activeNodes = [];
-        transitionOutPlaybackGraph(previousNodes);
-      } else {
-        cleanupActivePlaybackGraph(true);
-        activeNodes = [];
-      }
-      playbackEndTime = 0;
-      playbackTailSeconds = 0;
-      const sessionToken = playbackSessionToken;
-      playbackOffset = Math.max(0, Math.min(offsetSeconds, Math.max(0, currentBuffer.duration - 0.05)));
-      playbackStartedAt = audioContext.currentTime + 0.12;
-      playbackTailSeconds = isOriginalMode ? 0 : estimatePlaybackTailSeconds(playbackSettings);
-      playbackEndTime = playbackStartedAt + Math.max(0, currentBuffer.duration - playbackOffset) + playbackTailSeconds;
-      applyCurrentMasterBusProfile(playbackSettings);
+    function schedulePlaybackGraph(buffer, trackMeta, offsetSeconds, startTime, settings, graphId) {
+      const normalizedOffset = Math.max(0, Math.min(offsetSeconds, Math.max(0, buffer.duration - 0.05)));
+      const tailSeconds = isOriginalMode ? 0 : estimatePlaybackTailSeconds(settings);
+      const contentDuration = Math.max(0, buffer.duration - normalizedOffset);
+      const graphEndTime = startTime + contentDuration + tailSeconds;
 
       if (isOriginalMode) {
         syncSharedEffectBusUsage([], audioContext);
         const source = audioContext.createBufferSource();
-        source.buffer = currentBuffer;
+        source.buffer = buffer;
 
         const gainNode = audioContext.createGain();
         gainNode.gain.value = 1;
@@ -483,8 +619,9 @@
         const output = ensureOutputChain(audioContext);
         source.connect(gainNode);
         gainNode.connect(output);
-        source.start(playbackStartedAt, playbackOffset);
+        source.start(startTime, normalizedOffset);
         activeNodes.push({
+          groupId: graphId,
           source,
           trimNode: gainNode,
           cleanup: () => {
@@ -499,13 +636,14 @@
           },
         });
 
-        playbackSlider.disabled = false;
-        updatePlaybackUI(playbackOffset);
-        schedulePlaybackCompletionMonitor(sessionToken);
-        startProgressLoop();
-        isPlaying = true;
-        setPlayButtonState();
-        return;
+        return {
+          graphId,
+          offsetSeconds: normalizedOffset,
+          startTime,
+          tailSeconds,
+          contentEndTime: startTime + contentDuration,
+          endTime: graphEndTime,
+        };
       }
 
       const {
@@ -519,10 +657,10 @@
         peakSuppression,
         roomPreset,
         audiencePreset,
-      } = playbackSettings;
+      } = settings;
       const audience = getAudiencePresetConfig(audiencePreset);
       const effectiveDelayMs = delayMs * audience.delayScale;
-      const variationSeedBase = currentTrackId || currentTrackUrl || "default";
+      const variationSeedBase = trackMeta.id || trackMeta.url || "default";
       const preset = getRoomPresetConfig(roomPreset);
       const layerCache = buildLayerComputationCache(
         count,
@@ -607,6 +745,7 @@
           : null,
       };
       const playbackBuildContext = {
+        groupId: graphId,
         trackCount: count,
         preset,
         audience,
@@ -618,9 +757,9 @@
       };
       for (let index = 0; index < count; index += 1) {
         scheduleLayeredTrack(
-          currentBuffer,
-          playbackStartedAt + (index * effectiveDelayMs) / 1000,
-          playbackOffset,
+          buffer,
+          startTime + (index * effectiveDelayMs) / 1000,
+          normalizedOffset,
           layerCache.shapedVolumes[index],
           index,
           delayMs,
@@ -637,10 +776,169 @@
         );
       }
 
+      return {
+        graphId,
+        offsetSeconds: normalizedOffset,
+        startTime,
+        tailSeconds,
+        contentEndTime: startTime + contentDuration,
+        endTime: graphEndTime,
+      };
+    }
+
+    async function scheduleUpcomingTrackHandoff(sessionToken) {
+      clearScheduledTrackTransition(false);
+
+      if (
+        !audioContext ||
+        !currentBuffer ||
+        !playbackSettings ||
+        !isPlaying ||
+        loopPlaybackInput.checked ||
+        playlistCount <= 1 ||
+        !playOrder.length
+      ) {
+        return;
+      }
+
+      const nextOrderPosition = getAdjacentOrderPosition(1);
+      if (nextOrderPosition === null) {
+        return;
+      }
+
+      const timeRemaining = playbackEndTime - audioContext.currentTime;
+      if (timeRemaining < BACKGROUND_HANDOFF_MIN_LOOKAHEAD_SECONDS) {
+        return;
+      }
+
+      const nextEntryIndex = playOrder[nextOrderPosition];
+      if (failedPlaylistEntryIndexes.has(nextEntryIndex)) {
+        return;
+      }
+
+      try {
+        const entry = await ensurePlaylistEntry(nextEntryIndex);
+        if (!entry?.url || sessionToken !== playbackSessionToken || !isPlaying) {
+          return;
+        }
+
+        const prepared = await fetchPreparedTrack(entry.url);
+        if (sessionToken !== playbackSessionToken || !isPlaying) {
+          return;
+        }
+
+        let nextBuffer = null;
+        if (prefetchedBufferTrackId === prepared.id && prefetchedBufferTrackUrl === entry.url && prefetchedAudioBuffer) {
+          nextBuffer = prefetchedAudioBuffer;
+        } else {
+          nextBuffer = await loadAudioBuffer(prepared.id);
+        }
+
+        if (!nextBuffer || sessionToken !== playbackSessionToken || !isPlaying) {
+          return;
+        }
+
+        const contentEndTime = playbackStartedAt + Math.max(0, currentBuffer.duration - playbackOffset);
+        const overlapSeconds = Math.min(BACKGROUND_HANDOFF_OVERLAP_SECONDS, Math.max(0.04, contentEndTime - audioContext.currentTime - 0.08));
+        const transitionTime = Math.max(audioContext.currentTime + 0.08, contentEndTime - overlapSeconds);
+        if (transitionTime >= playbackEndTime) {
+          return;
+        }
+
+        const nextGraphId = ++playbackGraphCounter;
+        const nextTrackMeta = { id: prepared.id, url: entry.url };
+        const nextPlayback = schedulePlaybackGraph(nextBuffer, nextTrackMeta, 0, transitionTime, playbackSettings, nextGraphId);
+        const previousGraphId = currentPlaybackGraphId;
+        const previousEndTime = playbackEndTime;
+
+        scheduledTrackTransition = {
+          entry,
+          entryIndex: nextEntryIndex,
+          orderPosition: nextOrderPosition,
+          prepared,
+          buffer: nextBuffer,
+          graphId: nextGraphId,
+          startTime: transitionTime,
+          endTime: nextPlayback.endTime,
+          tailSeconds: nextPlayback.tailSeconds,
+        };
+        scheduledTrackTransitionCleanup = scheduleContextTask(transitionTime, () => {
+          if (sessionToken !== playbackSessionToken || !scheduledTrackTransition) {
+            return;
+          }
+
+          const activated = scheduledTrackTransition;
+          clearScheduledTrackTransition(false);
+          currentOrderPosition = activated.orderPosition;
+          applyLoadedTrackState(activated.entry, activated.prepared, activated.buffer, activated.entryIndex, 0);
+          currentPlaybackGraphId = activated.graphId;
+          playbackSessionToken += 1;
+          playbackStartedAt = activated.startTime;
+          playbackOffset = 0;
+          playbackTailSeconds = activated.tailSeconds;
+          playbackEndTime = activated.endTime;
+          updatePlaybackUI(0);
+          setPlayButtonState();
+          schedulePlaybackCompletionMonitor(playbackSessionToken);
+          schedulePlaybackGroupCleanup(previousGraphId, previousEndTime + 0.08);
+          queueMicrotask(() => {
+            scheduleUpcomingTrackHandoff(playbackSessionToken).catch((error) => {
+              console.warn("scheduled handoff queue failed", error);
+            });
+          });
+        });
+      } catch (error) {
+        console.warn("scheduled handoff skipped", error);
+      }
+    }
+
+    function playCurrentBuffer(offsetSeconds = 0, options = {}) {
+      if (!audioContext || !currentBuffer || !playbackSettings) {
+        return;
+      }
+
+      const shouldCrossfade = Boolean(options.crossfadeFromCurrent) && isPlaying && activeNodes.length > 0;
+      const previousNodes = shouldCrossfade ? activeNodes : [];
+
+      playbackSessionToken += 1;
+      stopProgressLoop();
+      clearPlaybackCompletionMonitor(false);
+      if (shouldCrossfade) {
+        activeNodes = [];
+        transitionOutPlaybackGraph(previousNodes);
+      } else {
+        cleanupActivePlaybackGraph(true);
+        activeNodes = [];
+      }
+      playbackEndTime = 0;
+      playbackTailSeconds = 0;
+      const sessionToken = playbackSessionToken;
+      playbackOffset = Math.max(0, Math.min(offsetSeconds, Math.max(0, currentBuffer.duration - 0.05)));
+      playbackStartedAt = audioContext.currentTime + 0.12;
+      currentPlaybackGraphId = ++playbackGraphCounter;
+      applyCurrentMasterBusProfile(playbackSettings);
+      const playback = schedulePlaybackGraph(
+        currentBuffer,
+        { id: currentTrackId, url: currentTrackUrl },
+        playbackOffset,
+        playbackStartedAt,
+        playbackSettings,
+        currentPlaybackGraphId
+      );
+      playbackStartedAt = playback.startTime;
+      playbackOffset = playback.offsetSeconds;
+      playbackTailSeconds = playback.tailSeconds;
+      playbackEndTime = playback.endTime;
+
       playbackSlider.disabled = false;
       updatePlaybackUI(playbackOffset);
       schedulePlaybackCompletionMonitor(sessionToken);
       startProgressLoop();
       isPlaying = true;
       setPlayButtonState();
+      queueMicrotask(() => {
+        scheduleUpcomingTrackHandoff(sessionToken).catch((error) => {
+          console.warn("scheduled handoff queue failed", error);
+        });
+      });
     }

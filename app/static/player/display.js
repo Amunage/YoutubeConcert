@@ -60,12 +60,11 @@
       return `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg`;
     }
 
-    function updateTrackThumbnail(entry = null) {
-      if (!thumbnailPanel || !trackThumbnail) {
+    function applyTrackThumbnailUrl(thumbnailUrl, altText = "") {
+      if (!trackThumbnail || !thumbnailPanel) {
         return;
       }
 
-      const thumbnailUrl = getTrackThumbnailUrl(entry);
       if (!thumbnailUrl) {
         trackThumbnail.removeAttribute("src");
         trackThumbnail.alt = "";
@@ -75,9 +74,33 @@
       }
 
       trackThumbnail.src = thumbnailUrl;
-      trackThumbnail.alt = entry?.title ? `${entry.title} thumbnail` : "Track thumbnail";
+      trackThumbnail.alt = altText;
       thumbnailPanel.classList.add("visible");
       thumbnailPanel.setAttribute("aria-hidden", "false");
+    }
+
+    function updateTrackThumbnail(entry = null, options = {}) {
+      if (!thumbnailPanel || !trackThumbnail) {
+        return;
+      }
+
+      const thumbnailUrl = getTrackThumbnailUrl(entry);
+      const altText = entry?.title ? `${entry.title} thumbnail` : "Track thumbnail";
+      if (!thumbnailUrl) {
+        applyTrackThumbnailUrl("", "");
+        return;
+      }
+
+      const shouldForceReload = Boolean(options.forceReload) && trackThumbnail.getAttribute("src") === thumbnailUrl;
+      if (shouldForceReload) {
+        trackThumbnail.removeAttribute("src");
+        requestAnimationFrame(() => {
+          applyTrackThumbnailUrl(thumbnailUrl, altText);
+        });
+        return;
+      }
+
+      applyTrackThumbnailUrl(thumbnailUrl, altText);
     }
 
     function applyStatusMarquee() {

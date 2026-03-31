@@ -67,16 +67,25 @@
     let playbackMonitorCleanup = null;
     let playbackMonitorTimer = null;
     let playbackSessionToken = 0;
+    let playbackGraphCounter = 0;
+    let currentPlaybackGraphId = 0;
     let hasPrimedAudioSession = false;
     let audioKeepAliveNode = null;
     let trackPreviewRenderFrame = null;
     let playlistSelectRenderKey = "";
     let playlistEntryAccessTick = 0;
     let playlistEntryAccessTimes = {};
+    let scheduledTrackTransition = null;
+    let scheduledTrackTransitionCleanup = null;
+    let deferredPlaybackTaskCleanups = [];
+    let preparedTrackCache = {};
+    let preparedTrackRequestCache = {};
 
     const PLAYLIST_ENTRY_CACHE_LIMIT = 24;
     const PLAYLIST_PRELOAD_BEHIND = 1;
     const PLAYLIST_PRELOAD_AHEAD = 3;
+    const BACKGROUND_HANDOFF_OVERLAP_SECONDS = 0.18;
+    const BACKGROUND_HANDOFF_MIN_LOOKAHEAD_SECONDS = 1.4;
 
     const {
       buildLayerComputationCache,

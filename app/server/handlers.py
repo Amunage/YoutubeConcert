@@ -39,13 +39,26 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
         }
         return render_app_html(config)
 
+    @staticmethod
+    def is_client_disconnect_error(error: BaseException) -> bool:
+        return isinstance(error, (BrokenPipeError, ConnectionAbortedError, ConnectionResetError))
+
+    def write_response_body(self, body: bytes) -> bool:
+        try:
+            self.wfile.write(body)
+            return True
+        except OSError as error:
+            if self.is_client_disconnect_error(error):
+                return False
+            raise
+
     def send_json(self, status: int, payload: dict[str, str]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        self.write_response_body(body)
 
     def do_GET(self) -> None:
         if self.path in {"/", "/index.html"}:
@@ -54,7 +67,7 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            self.write_response_body(body)
             return
 
         if self.path.startswith("/media/"):
@@ -77,7 +90,8 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
                         chunk = audio_file.read(self.media_chunk_size)
                         if not chunk:
                             break
-                        self.wfile.write(chunk)
+                        if not self.write_response_body(chunk):
+                            break
             finally:
                 ACTIVE_TRACK_IDS.discard(track_id)
             return
@@ -137,7 +151,7 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            self.write_response_body(body)
             return
 
         if self.path == "/api/playlist-entry":
@@ -162,7 +176,7 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            self.write_response_body(body)
             return
 
         try:

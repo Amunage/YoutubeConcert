@@ -423,6 +423,7 @@ window.AudioLayers = (() => {
 
     source.start(layerStartTime, offsetSeconds);
     activeNodes.push({
+      groupId: playbackContext.groupId ?? null,
       source,
       trimNode: dryTrimGain,
       cleanup: createDisconnectCleanup(layerCleanupNodes),

@@ -27,17 +27,30 @@
     }
 
     async function fetchPreparedTrack(trackUrl) {
-      const response = await fetch("/api/prepare", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: trackUrl }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || "\uC624\uB514\uC624\uB97C \uC900\uBE44\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+      if (preparedTrackCache[trackUrl]) {
+        return preparedTrackCache[trackUrl];
       }
-      return data;
+
+      if (!preparedTrackRequestCache[trackUrl]) {
+        preparedTrackRequestCache[trackUrl] = (async () => {
+          const response = await fetch("/api/prepare", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: trackUrl }),
+          });
+
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.error || "\uC624\uB514\uC624\uB97C \uC900\uBE44\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+          }
+          preparedTrackCache[trackUrl] = data;
+          return data;
+        })().finally(() => {
+          delete preparedTrackRequestCache[trackUrl];
+        });
+      }
+
+      return preparedTrackRequestCache[trackUrl];
     }
 
     async function loadAudioBuffer(trackId) {
