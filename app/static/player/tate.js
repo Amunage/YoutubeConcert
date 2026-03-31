@@ -122,5 +122,10 @@
       if (!Array.isArray(values) || values.length === 0) {
         return 0;
       }
-      return values.reduce((maxValue, value) => Math.max(maxValue, Number(value) || 0), 0);
+      return values.reduce((maxValue, value) => {
+        const numericValue = value && typeof value === "object" && !Array.isArray(value)
+          ? Number(value.timeMs) || 0
+          : Number(value) || 0;
+        return Math.max(maxValue, numericValue);
+      }, 0);
     }

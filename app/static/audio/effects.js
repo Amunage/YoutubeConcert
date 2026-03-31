@@ -87,6 +87,10 @@ window.AudioEffects = (() => {
     return limitedPattern;
   }
 
+  function dbToGain(dbValue = 0) {
+    return Math.pow(10, (Number(dbValue) || 0) / 20);
+  }
+
   function getConvolverBuffer(presetName, stage = "late") {
     const preset = getRoomPresetConfig(presetName);
     const cacheKey = `${presetName}:${stage}:${audioContext.sampleRate}`;
@@ -105,22 +109,29 @@ window.AudioEffects = (() => {
       const channelData = impulse.getChannelData(channel);
 
       if (stage === "early") {
-        const tapPattern = Array.isArray(preset.earlyReflectionsMs) && preset.earlyReflectionsMs.length
-          ? preset.earlyReflectionsMs
-          : [8, 15, 24];
+        const tapPattern = Array.isArray(preset.earlyReflections) && preset.earlyReflections.length
+          ? preset.earlyReflections
+          : [{ timeMs: 8, pan: -0.14, gainDb: 0, filterHz: 6200 }, { timeMs: 15, pan: 0.12, gainDb: -1.5, filterHz: 5200 }, { timeMs: 24, pan: -0.08, gainDb: -3, filterHz: 4300 }];
         const stereoOffsetScale = Math.max(0.2, preset.reflectionWidth * 2.1);
 
         for (let tapIndex = 0; tapIndex < tapPattern.length; tapIndex += 1) {
-          const baseMs = tapPattern[tapIndex];
-          const stereoOffsetMs = (channel === 0 ? -1 : 1) * stereoOffsetScale * (0.6 + tapIndex * 0.22);
+          const reflection = tapPattern[tapIndex] || {};
+          const baseMs = Math.max(0, Number(reflection.timeMs) || 0);
+          const pan = Math.max(-1, Math.min(1, Number(reflection.pan) || 0));
+          const gainScale = dbToGain(reflection.gainDb);
+          const filterHz = Math.max(1200, Number(reflection.filterHz) || 5200);
+          const panOffsetMs = pan * stereoOffsetScale * 2.4;
+          const stereoOffsetMs = (channel === 0 ? -1 : 1) * stereoOffsetScale * (0.6 + tapIndex * 0.22) - panOffsetMs;
           const tapSample = Math.max(0, Math.min(length - 1, Math.floor(((baseMs + stereoOffsetMs) / 1000) * sampleRate)));
-          const tapGain = Math.max(0.08, 0.68 - tapIndex * 0.09) * (0.9 + seededRandom() * 0.18);
+          const channelPanWeight = channel === 0 ? 1 - pan * 0.55 : 1 + pan * 0.55;
+          const toneDamp = Math.max(0.35, Math.min(1, filterHz / 8200));
+          const tapGain = Math.max(0.08, 0.68 - tapIndex * 0.09) * gainScale * toneDamp * channelPanWeight * (0.9 + seededRandom() * 0.18);
           channelData[tapSample] += tapGain;
 
-          const smearLength = Math.max(10, Math.floor(sampleRate * (0.0028 + tapIndex * 0.0008)));
+          const smearLength = Math.max(10, Math.floor(sampleRate * (0.0024 + tapIndex * 0.0008 + (8200 - filterHz) / 1000000)));
           for (let smearIndex = 1; smearIndex < smearLength && tapSample + smearIndex < length; smearIndex += 1) {
             const smearDecay = Math.pow(1 - smearIndex / smearLength, 1.8 + tapIndex * 0.16);
-            const smearGrain = (seededRandom() * 2 - 1) * 0.34;
+            const smearGrain = (seededRandom() * 2 - 1) * 0.34 * toneDamp;
             channelData[tapSample + smearIndex] += smearGrain * tapGain * smearDecay;
           }
         }
@@ -131,13 +142,38 @@ window.AudioEffects = (() => {
           channelData[index] += wash;
         }
       } else {
-        const fadeInSamples = Math.max(1, Math.floor(sampleRate * Math.min(0.05, reverbSeconds * 0.08)));
+        const fadeInSamples = Math.max(1, Math.floor(sampleRate * Math.min(0.3, Math.max(0.1, reverbSeconds * 0.16))));
+        const bloomSamples = Math.max(fadeInSamples + 1, Math.floor(sampleRate * Math.min(0.7, Math.max(0.2, reverbSeconds * 0.34))));
+        const sparseTapCount = Math.max(3, Math.min(9, Math.round(reverbSeconds * 3.2)));
+
+        for (let tapIndex = 0; tapIndex < sparseTapCount; tapIndex += 1) {
+          const tapProgress = (tapIndex + 1) / (sparseTapCount + 1);
+          const tapTimeSeconds = 0.012 + tapProgress * Math.min(0.22, reverbSeconds * 0.18);
+          const tapSample = Math.max(0, Math.min(length - 1, Math.floor(tapTimeSeconds * sampleRate)));
+          const tapDecay = Math.pow(1 - tapSample / length, Math.max(1.1, decayPower * 0.82));
+          const tapGain = (0.24 - tapIndex * 0.018) * tapDecay * (0.88 + seededRandom() * 0.2);
+          const tapSpread = channel === 0 ? 1 - tapIndex * 0.015 : 0.94 + tapIndex * 0.012;
+          channelData[tapSample] += tapGain * tapSpread;
+
+          const tapSmearLength = Math.max(18, Math.floor(sampleRate * (0.004 + tapIndex * 0.0007)));
+          for (let smearIndex = 1; smearIndex < tapSmearLength && tapSample + smearIndex < length; smearIndex += 1) {
+            const smearDecay = Math.pow(1 - smearIndex / tapSmearLength, 1.5 + tapIndex * 0.08);
+            const smearGain = ((seededRandom() * 2 - 1) * 0.12 + 0.04) * tapGain;
+            channelData[tapSample + smearIndex] += smearGain * smearDecay;
+          }
+        }
+
         for (let index = 0; index < length; index += 1) {
           const decay = Math.pow(1 - index / length, decayPower);
           const shimmer = channel === 0 ? 1 - index / length : Math.pow(1 - index / length, 0.92);
-          const onset = index < fadeInSamples ? index / fadeInSamples : 1;
-          const grain = (seededRandom() * 2 - 1) * 0.82 + (seededRandom() * 2 - 1) * 0.18;
-          channelData[index] = grain * decay * shimmer * onset;
+          const onsetLinear = index < fadeInSamples ? index / fadeInSamples : 1;
+          const onset = Math.pow(onsetLinear, 1.85);
+          const densityProgress = index < bloomSamples ? index / bloomSamples : 1;
+          const density = 0.24 + Math.pow(densityProgress, 1.35) * 0.76;
+          const lateGrain = (seededRandom() * 2 - 1) * (0.5 + density * 0.28);
+          const diffuseGrain = (seededRandom() * 2 - 1) * 0.16 * density;
+          const grain = lateGrain + diffuseGrain;
+          channelData[index] += grain * decay * shimmer * onset * density;
         }
       }
     }
@@ -154,6 +190,7 @@ window.AudioEffects = (() => {
     getComplexityProfile,
     getAuxiliaryTapCount,
     limitTapPattern,
+    dbToGain,
     getConvolverBuffer,
   };
 })();

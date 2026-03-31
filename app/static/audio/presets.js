@@ -14,7 +14,10 @@ window.AudioPresets = (() => {
       reverbSeconds: 0.55,
       decayPower: 3.2,
       preDelayMs: 4,
-      earlyReflectionsMs: [9, 17],
+      earlyReflections: [
+        { timeMs: 9, pan: -0.16, gainDb: -1.2, filterHz: 7200 },
+        { timeMs: 17, pan: 0.12, gainDb: -2.4, filterHz: 6000 },
+      ],
       stereoWidth: 0.03,
       reflectionWidth: 0.1,
       distanceEq: 0.12,
@@ -37,7 +40,11 @@ window.AudioPresets = (() => {
       reverbSeconds: 1.25,
       decayPower: 2.35,
       preDelayMs: 10,
-      earlyReflectionsMs: [10, 18, 27],
+      earlyReflections: [
+        { timeMs: 10, pan: -0.26, gainDb: -1.2, filterHz: 7600 },
+        { timeMs: 18, pan: 0.2, gainDb: -2.2, filterHz: 6500 },
+        { timeMs: 27, pan: -0.08, gainDb: -3.4, filterHz: 5600 },
+      ],
       stereoWidth: 0.09,
       reflectionWidth: 0.2,
       distanceEq: 0.28,
@@ -60,7 +67,12 @@ window.AudioPresets = (() => {
       reverbSeconds: 3.6,
       decayPower: 1.65,
       preDelayMs: 28,
-      earlyReflectionsMs: [14, 29, 46, 66],
+      earlyReflections: [
+        { timeMs: 14, pan: -0.34, gainDb: -1.4, filterHz: 8200 },
+        { timeMs: 29, pan: 0.28, gainDb: -2.1, filterHz: 6900 },
+        { timeMs: 46, pan: -0.1, gainDb: -3.2, filterHz: 5600 },
+        { timeMs: 66, pan: 0.12, gainDb: -4.4, filterHz: 4600 },
+      ],
       stereoWidth: 0.2,
       reflectionWidth: 0.4,
       distanceEq: 0.62,
@@ -83,7 +95,14 @@ window.AudioPresets = (() => {
       reverbSeconds: 6.4,
       decayPower: 1.18,
       preDelayMs: 42,
-      earlyReflectionsMs: [21, 39, 58, 79, 104, 132],
+      earlyReflections: [
+        { timeMs: 21, pan: -0.42, gainDb: -1.6, filterHz: 7800 },
+        { timeMs: 39, pan: 0.36, gainDb: -2.4, filterHz: 6500 },
+        { timeMs: 58, pan: -0.18, gainDb: -3.4, filterHz: 5400 },
+        { timeMs: 79, pan: 0.14, gainDb: -4.4, filterHz: 4500 },
+        { timeMs: 104, pan: -0.08, gainDb: -5.6, filterHz: 3900 },
+        { timeMs: 132, pan: 0.06, gainDb: -6.6, filterHz: 3400 },
+      ],
       stereoWidth: 0.3,
       reflectionWidth: 0.56,
       distanceEq: 0.9,
@@ -112,6 +131,9 @@ window.AudioPresets = (() => {
       tailGainScale: 0.92,
       directCutHz: 0,
       wetLowpassCut: 0,
+      wetHighpassBoostHz: 0,
+      wetLowShelfCutDb: 0,
+      dynamicWetTrimStrength: 0,
       articulationCutHz: 0,
       presenceDipDb: -1.5,
       layerFadeMs: 26,
@@ -133,9 +155,9 @@ window.AudioPresets = (() => {
       distanceOffset: 0.34,
       dryGain: 0.86,
       directMixTrim: 0.86,
-      wetMix: 1.78,
+      wetMix: 1.62,
       stereoWidth: 1.16,
-      reflectionBoost: 1.28,
+      reflectionBoost: 1.12,
       extraHighCut: 0.64,
       preDelayMs: 26,
       delayScale: 1.24,
@@ -144,6 +166,9 @@ window.AudioPresets = (() => {
       tailGainScale: 1.12,
       directCutHz: 2200,
       wetLowpassCut: 1100,
+      wetHighpassBoostHz: 120,
+      wetLowShelfCutDb: -5.5,
+      dynamicWetTrimStrength: 0.34,
       articulationCutHz: 2400,
       presenceDipDb: -9,
       layerFadeMs: 120,
@@ -165,9 +190,9 @@ window.AudioPresets = (() => {
       distanceOffset: 0.2,
       dryGain: 1.12,
       directMixTrim: 0.94,
-      wetMix: 1.48,
+      wetMix: 1.36,
       stereoWidth: 1.1,
-      reflectionBoost: 1.16,
+      reflectionBoost: 1.06,
       extraHighCut: 0.32,
       preDelayMs: 12,
       delayScale: 1.12,
@@ -176,6 +201,9 @@ window.AudioPresets = (() => {
       tailGainScale: 1.06,
       directCutHz: 700,
       wetLowpassCut: 240,
+      wetHighpassBoostHz: 70,
+      wetLowShelfCutDb: -3.5,
+      dynamicWetTrimStrength: 0.22,
       articulationCutHz: 900,
       presenceDipDb: -4.5,
       layerFadeMs: 72,
@@ -208,6 +236,9 @@ window.AudioPresets = (() => {
       tailGainScale: 1,
       directCutHz: 0,
       wetLowpassCut: 0,
+      wetHighpassBoostHz: 0,
+      wetLowShelfCutDb: 0,
+      dynamicWetTrimStrength: 0,
       articulationCutHz: 240,
       presenceDipDb: -2.4,
       layerFadeMs: 42,
@@ -256,6 +287,31 @@ window.AudioPresets = (() => {
     },
   };
 
+  function normalizeEarlyReflectionEntry(entry, index = 0, fallbackWidth = 0.2) {
+    if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+      return {
+        timeMs: Math.max(0, Number(entry.timeMs) || 0),
+        pan: Math.max(-1, Math.min(1, Number(entry.pan) || 0)),
+        gainDb: Number(entry.gainDb) || 0,
+        filterHz: Math.max(800, Number(entry.filterHz) || 5200),
+      };
+    }
+
+    const timeMs = Math.max(0, Number(entry) || 0);
+    const direction = index % 2 === 0 ? -1 : 1;
+    return {
+      timeMs,
+      pan: Math.max(-1, Math.min(1, direction * fallbackWidth * (0.65 + index * 0.12))),
+      gainDb: -index * 1.2,
+      filterHz: Math.max(1400, 8200 - index * 900),
+    };
+  }
+
+  function normalizeEarlyReflectionSet(entries, fallbackWidth = 0.2) {
+    const sourceEntries = Array.isArray(entries) && entries.length ? entries : [8, 15, 24];
+    return sourceEntries.map((entry, index) => normalizeEarlyReflectionEntry(entry, index, fallbackWidth));
+  }
+
   function getAudienceTrackProfile(presetName, layerIndex, trackCount) {
     const factors = AUDIENCE_TRACK_PROFILE_FACTORS[presetName] || AUDIENCE_TRACK_PROFILE_FACTORS.mid;
     const totalTracks = Math.max(1, trackCount || 1);
@@ -278,8 +334,14 @@ window.AudioPresets = (() => {
 
   function getRoomPresetConfig(presetName) {
     const preset = ROOM_PRESETS[presetName] || ROOM_PRESETS.hall;
+    const earlyReflections = normalizeEarlyReflectionSet(
+      preset.earlyReflections || preset.earlyReflectionsMs,
+      preset.reflectionWidth
+    );
     return {
       ...preset,
+      earlyReflections,
+      earlyReflectionsMs: earlyReflections.map((entry) => entry.timeMs),
       earlyWetMix: preset.earlyWetMix ?? 0.58,
       lateWetMix: preset.lateWetMix ?? 0.72,
       earlyReverbSeconds: preset.earlyReverbSeconds ?? Math.min(0.34, preset.reverbSeconds * 0.18 + 0.05),
@@ -304,5 +366,6 @@ window.AudioPresets = (() => {
     ROOM_PRESETS,
     AUDIENCE_PRESETS,
     AUDIENCE_TRACK_PROFILE_FACTORS,
+    normalizeEarlyReflectionSet,
   };
 })();

@@ -1,5 +1,5 @@
 window.AudioBuses = (() => {
-  const { clamp, getConvolverBuffer } = window.AudioEffects;
+  const { clamp, getConvolverBuffer, dbToGain } = window.AudioEffects;
   const { ensureOutputChainState, connectToOutput } = window.AudioOutput;
   const BUS_TRANSITION_SECONDS = 0.38;
   const BUS_CLEANUP_GRACE_SECONDS = 0.7;
@@ -405,25 +405,43 @@ window.AudioBuses = (() => {
   }
 
   function buildReflectionNetwork(inputNode, targetNode, options = {}, context = audioContext) {
-    const tapTimesMs = Array.isArray(options.tapTimesMs) && options.tapTimesMs.length ? options.tapTimesMs : [14, 29, 46, 66];
+    const reflections = Array.isArray(options.reflections) && options.reflections.length
+      ? options.reflections
+      : Array.isArray(options.tapTimesMs) && options.tapTimesMs.length
+        ? options.tapTimesMs.map((timeMs, index) => ({
+            timeMs,
+            pan: (index % 2 === 0 ? -1 : 1) * (0.16 + index * 0.08),
+            gainDb: -index * 1.4,
+            filterHz: Math.max(1000, 9000 - index * 720),
+          }))
+        : [14, 29, 46, 66].map((timeMs, index) => ({
+            timeMs,
+            pan: (index % 2 === 0 ? -1 : 1) * (0.16 + index * 0.08),
+            gainDb: -index * 1.4,
+            filterHz: Math.max(1000, 9000 - index * 720),
+          }));
     const spacing = Math.max(0.7, options.spacing || 1);
     const stereoWidth = clamp(options.stereoWidth ?? 0.4, 0.12, 0.9);
     const reflectionBoost = clamp(options.reflectionBoost ?? 1, 0.5, 1.6);
     const nodes = [];
 
-    tapTimesMs.forEach((timeMs, index) => {
+    reflections.forEach((reflection, index) => {
+      const timeMs = Math.max(0, Number(reflection?.timeMs) || 0);
+      const filterHz = Math.max(1000, Number(reflection?.filterHz) || (9000 - index * 720));
+      const pan = clamp((Number(reflection?.pan) || 0) * stereoWidth, -0.9, 0.9);
+      const gain = Math.max(0.016, 0.16 - index * 0.025) * dbToGain(reflection?.gainDb) * reflectionBoost;
       const tapDelay = context.createDelay(0.42);
       tapDelay.delayTime.value = Math.max(0.004, (timeMs * spacing + index * 2.6) / 1000);
 
       const tapFilter = context.createBiquadFilter();
       tapFilter.type = "lowpass";
-      tapFilter.frequency.value = Math.max(1000, 9000 - index * 720);
+      tapFilter.frequency.value = filterHz;
 
       const tapGain = context.createGain();
-      tapGain.gain.value = Math.max(0.016, 0.16 - index * 0.025) * reflectionBoost;
+      tapGain.gain.value = gain;
 
       const tapPanner = context.createStereoPanner();
-      tapPanner.pan.value = clamp((index % 2 === 0 ? -1 : 1) * (0.16 + index * 0.08) * stereoWidth, -0.9, 0.9);
+      tapPanner.pan.value = pan;
 
       inputNode.connect(tapDelay);
       tapDelay.connect(tapFilter);

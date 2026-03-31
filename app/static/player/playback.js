@@ -315,7 +315,7 @@
       const blurCount = Array.isArray(audience.transientBlurTapMs) ? audience.transientBlurTapMs.length : 0;
       const blurExtraMs = auxiliaryScale > 0 ? getMaxMs(audience.transientBlurTapMs) + Math.max(0, blurCount - 1) * 1.7 + 4.5 : 0;
       const reflectionExtraMs = auxiliaryScale > 0
-        ? getMaxMs(preset.earlyReflectionsMs) * audience.reflectionSpacing +
+        ? getMaxMs(preset.earlyReflections) * audience.reflectionSpacing +
           12 +
           Math.max(0, trackCount - 1) * 2.5 +
           effectiveDelayMs * 0.02
@@ -597,7 +597,7 @@
               {
                 roomPreset,
                 audiencePreset,
-                tapTimesMs: preset.earlyReflectionsMs,
+                reflections: preset.earlyReflections,
                 spacing: audience.reflectionSpacing,
                 stereoWidth: preset.reflectionWidth * audience.stereoWidth,
                 reflectionBoost: audience.reflectionBoost,
