@@ -1,25 +1,19 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-import argparse
 import http.server
 import json
 import mimetypes
 import threading
 
-from .backend import (
+from ..backend import (
     ADMIN_TOKEN,
     is_probably_youtube,
     prepare_track,
-    prune_cache,
     read_track_bytes,
     resolve_input_url,
     resolve_playlist_entry,
 )
-from .runtime import ThreadingHTTPServer, open_browser_tab
-from .ui import render_app_html
-
-
-
+from ..ui import render_app_html
 
 
 class AppHandler(http.server.BaseHTTPRequestHandler):
@@ -177,29 +171,3 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args) -> None:
         return
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Serve a local app that downloads YouTube audio and layers it with time offsets."
-    )
-    parser.add_argument("--host", default="127.0.0.1", help="Host interface to bind to.")
-    parser.add_argument("--port", type=int, default=8000, help="Port to bind to.")
-    args = parser.parse_args()
-
-    prune_cache()
-
-    app_url = f"http://{args.host}:{args.port}"
-
-    with ThreadingHTTPServer((args.host, args.port), AppHandler) as server:
-        print(f"YouTube Concert is running at {app_url}")
-        print("Paste a YouTube URL in the browser, then the app will fetch audio and layer it locally.")
-        open_browser_tab(app_url)
-        try:
-            server.serve_forever()
-        except KeyboardInterrupt:
-            print("\\nServer stopped.")
-
-
-if __name__ == "__main__":
-    main()
