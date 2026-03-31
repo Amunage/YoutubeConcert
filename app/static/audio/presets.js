@@ -230,21 +230,29 @@ window.AudioPresets = (() => {
       volumeScale: { base: 1.04, front: 0.12, rear: -0.04, min: null },
       reverbExtra: { front: -18 },
       suppressionExtra: { front: -14 },
+      clarityBoost: { front: 0 },
+      wetMixTrim: { front: -0.08 },
     },
     outside: {
       volumeScale: { base: 0.17, front: 0.05, rear: -0.01, min: 0.14 },
       reverbExtra: { front: 48 },
       suppressionExtra: { front: 42 },
+      clarityBoost: { front: 1.4 },
+      wetMixTrim: { front: -0.24 },
     },
     rear: {
       volumeScale: { base: 0.74, front: 0.12, rear: -0.02, min: 0.7 },
       reverbExtra: { front: 34 },
       suppressionExtra: { front: 30 },
+      clarityBoost: { front: 1.1 },
+      wetMixTrim: { front: -0.18 },
     },
     mid: {
       volumeScale: { base: 0.92, front: 0.08, rear: -0.04, min: 0.8 },
       reverbExtra: { front: 10 },
       suppressionExtra: { front: 8 },
+      clarityBoost: { front: 0.75 },
+      wetMixTrim: { front: -0.12 },
     },
   };
 
@@ -263,6 +271,8 @@ window.AudioPresets = (() => {
       volumeScale: factors.volumeScale.min === null ? volumeScaleRaw : Math.max(factors.volumeScale.min, volumeScaleRaw),
       reverbExtra: (factors.reverbExtra.front || 0) * frontWeight,
       suppressionExtra: (factors.suppressionExtra.front || 0) * frontWeight,
+      clarityBoost: (factors.clarityBoost?.front || 0) * frontWeight,
+      wetMixTrim: (factors.wetMixTrim?.front || 0) * frontWeight,
     };
   }
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 import time
 
@@ -10,6 +9,22 @@ from .youtube import run_yt_dlp_resolve
 RESOLVE_CACHE_TTL_SECONDS = 300
 RESOLVE_CACHE_MAX_ENTRIES = 128
 RESOLVE_CACHE: dict[str, tuple[float, object]] = {}
+
+
+def clone_resolve_payload(payload: object) -> object:
+    if isinstance(payload, dict):
+        cloned: dict[object, object] = {}
+        for key, value in payload.items():
+            if isinstance(value, list):
+                cloned[key] = [item.copy() if isinstance(item, dict) else item for item in value]
+            elif isinstance(value, dict):
+                cloned[key] = value.copy()
+            else:
+                cloned[key] = value
+        return cloned
+    if isinstance(payload, list):
+        return [item.copy() if isinstance(item, dict) else item for item in payload]
+    return payload
 
 
 def get_resolve_cache(cache_key: str) -> object | None:
@@ -22,11 +37,11 @@ def get_resolve_cache(cache_key: str) -> object | None:
         RESOLVE_CACHE.pop(cache_key, None)
         return None
 
-    return copy.deepcopy(payload)
+    return clone_resolve_payload(payload)
 
 
 def set_resolve_cache(cache_key: str, payload: object) -> None:
-    RESOLVE_CACHE[cache_key] = (time.monotonic(), copy.deepcopy(payload))
+    RESOLVE_CACHE[cache_key] = (time.monotonic(), clone_resolve_payload(payload))
     if len(RESOLVE_CACHE) <= RESOLVE_CACHE_MAX_ENTRIES:
         return
 

@@ -150,6 +150,8 @@ window.AudioLayers = (() => {
     );
     const adjustedVolume = volume * audienceTrack.volumeScale * layerVariation.gainScale;
     const directMixLevel = audience.directMixTrim * Math.max(0.82, 1 - layerBlend * 0.12);
+    const leadClarity = audienceTrack.clarityBoost || 0;
+    const wetMixTrim = audienceTrack.wetMixTrim || 0;
 
     const lowpassNode = audioContext.createBiquadFilter();
     lowpassNode.type = "lowpass";
@@ -163,12 +165,21 @@ window.AudioLayers = (() => {
     );
     lowpassNode.Q.value = 0.64;
 
+    const directHighpassNode = audioContext.createBiquadFilter();
+    directHighpassNode.type = "highpass";
+    directHighpassNode.frequency.value = Math.max(
+      26,
+      32 + distanceBlend * 42 + audience.directCutHz * 0.03
+    );
+    directHighpassNode.Q.value = 0.58;
+
     const highShelfNode = audioContext.createBiquadFilter();
     highShelfNode.type = "highshelf";
     highShelfNode.frequency.value = 3200;
     highShelfNode.gain.value =
       preset.directToneLift -
       distanceBlend * (7.4 + preset.distanceEq * 5.9 + audience.extraHighCut * 6.6) +
+      leadClarity +
       layerVariation.highShelfOffsetDb;
 
     const presenceDipNode = audioContext.createBiquadFilter();
@@ -178,18 +189,18 @@ window.AudioLayers = (() => {
       2900 - audience.articulationCutHz * 0.24 + layerVariation.articulationOffsetHz * 0.34
     );
     presenceDipNode.Q.value = 0.82;
-    presenceDipNode.gain.value = audience.presenceDipDb * (0.72 + layerBlend * 0.42);
+    presenceDipNode.gain.value = audience.presenceDipDb * (0.72 + layerBlend * 0.42) + leadClarity * 0.55;
 
     const transientDipNode = audioContext.createBiquadFilter();
     transientDipNode.type = "peaking";
     transientDipNode.frequency.value = Math.max(1800, 3400 + layerBlend * 560 + layerVariation.articulationOffsetHz);
     transientDipNode.Q.value = 1.28;
-    transientDipNode.gain.value = audience.transientDipDb * (0.96 + layerBlend * 0.28);
+    transientDipNode.gain.value = audience.transientDipDb * (0.96 + layerBlend * 0.28) + leadClarity * 0.72;
 
     const lowShelfNode = audioContext.createBiquadFilter();
     lowShelfNode.type = "lowshelf";
     lowShelfNode.frequency.value = 210;
-    lowShelfNode.gain.value = -distanceBlend * 2.8;
+    lowShelfNode.gain.value = -distanceBlend * (3.8 + audience.directCutHz * 0.0012);
 
     const compressorNode = audioContext.createDynamicsCompressor();
     compressorNode.threshold.value = -15 - suppressionDrive * 0.085 - layerBlend * 8.5;
@@ -208,6 +219,7 @@ window.AudioLayers = (() => {
     const layerCleanupNodes = [
       source,
       lowpassNode,
+      directHighpassNode,
       highShelfNode,
       presenceDipNode,
       transientDipNode,
@@ -220,7 +232,8 @@ window.AudioLayers = (() => {
     source.playbackRate.value = layerVariation.playbackRate;
 
     source.connect(lowpassNode);
-    lowpassNode.connect(highShelfNode);
+    lowpassNode.connect(directHighpassNode);
+    directHighpassNode.connect(highShelfNode);
     highShelfNode.connect(presenceDipNode);
     presenceDipNode.connect(transientDipNode);
     transientDipNode.connect(lowShelfNode);
@@ -230,7 +243,10 @@ window.AudioLayers = (() => {
     dryTrimGain.connect(pannerNode);
     connectToOutput(pannerNode);
 
-    const wetMix = preset.wetMix * audience.wetMix * reverbAmount * (0.48 + reverbDrive / 92) * (0.42 + layerBlend * 0.78);
+    const wetMix = Math.max(
+      0,
+      preset.wetMix * audience.wetMix * (1 + wetMixTrim) * reverbAmount * (0.48 + reverbDrive / 92) * (0.42 + layerBlend * 0.78)
+    );
     const earlyWetMix = wetMix * preset.earlyWetMix * Math.max(0.58, 0.96 - distanceBlend * 0.16);
     if (earlyWetMix > 0.008) {
       const earlyBus = sharedBuses?.early || ensureSharedEffectBus("early", { roomPreset });
@@ -245,7 +261,7 @@ window.AudioLayers = (() => {
 
       const earlyHighpass = audioContext.createBiquadFilter();
       earlyHighpass.type = "highpass";
-      earlyHighpass.frequency.value = Math.max(90, 150 + distanceBlend * 90);
+      earlyHighpass.frequency.value = Math.max(110, 170 + distanceBlend * 125 + audience.directCutHz * 0.022);
 
       const earlyLowpass = audioContext.createBiquadFilter();
       earlyLowpass.type = "lowpass";
@@ -255,7 +271,7 @@ window.AudioLayers = (() => {
       );
 
       const earlyPanner = audioContext.createStereoPanner();
-      earlyPanner.pan.value = clamp(basePan * 0.32, -0.45, 0.45);
+      earlyPanner.pan.value = clamp(basePan * (0.34 + distanceBlend * 0.08), -0.52, 0.52);
       layerCleanupNodes.push(earlySendGain, earlyPreDelay, earlyHighpass, earlyLowpass, earlyPanner);
 
       compressorNode.connect(earlySendGain);
@@ -287,14 +303,20 @@ window.AudioLayers = (() => {
         7600 - distanceBlend * 2500 - audience.wetLowpassCut - preset.lateToneCut
       );
 
+      const lateHighpass = audioContext.createBiquadFilter();
+      lateHighpass.type = "highpass";
+      lateHighpass.frequency.value = Math.max(150, 210 + distanceBlend * 170 + audience.directCutHz * 0.045);
+      lateHighpass.Q.value = 0.62;
+
       const latePanner = audioContext.createStereoPanner();
-      latePanner.pan.value = clamp(basePan * 0.12, -0.28, 0.28);
-      layerCleanupNodes.push(lateSendGain, latePreDelay, lateFilter, latePanner);
+      latePanner.pan.value = clamp(basePan * (0.18 + distanceBlend * 0.18), -0.38, 0.38);
+      layerCleanupNodes.push(lateSendGain, latePreDelay, lateFilter, lateHighpass, latePanner);
 
       compressorNode.connect(lateSendGain);
       lateSendGain.connect(latePreDelay);
       latePreDelay.connect(lateFilter);
-      lateFilter.connect(latePanner);
+      lateFilter.connect(lateHighpass);
+      lateHighpass.connect(latePanner);
       if (lateBus) {
         latePanner.connect(lateBus.input);
       }
@@ -317,13 +339,19 @@ window.AudioLayers = (() => {
       diffusionPreFilter.type = "lowpass";
       diffusionPreFilter.frequency.value = Math.max(700, audience.diffusionCutHz - distanceBlend * 420 - layerBlend * 320);
 
+      const diffusionHighpass = audioContext.createBiquadFilter();
+      diffusionHighpass.type = "highpass";
+      diffusionHighpass.frequency.value = Math.max(130, 170 + distanceBlend * 85 + audience.directCutHz * 0.028);
+      diffusionHighpass.Q.value = 0.56;
+
       const diffusionPanner = audioContext.createStereoPanner();
-      diffusionPanner.pan.value = clamp(basePan * 0.18, -0.4, 0.4);
-      layerCleanupNodes.push(diffusionSend, diffusionPreFilter, diffusionPanner);
+      diffusionPanner.pan.value = clamp(basePan * (0.22 + distanceBlend * 0.12), -0.48, 0.48);
+      layerCleanupNodes.push(diffusionSend, diffusionPreFilter, diffusionHighpass, diffusionPanner);
 
       compressorNode.connect(diffusionSend);
       diffusionSend.connect(diffusionPreFilter);
-      diffusionPreFilter.connect(diffusionPanner);
+      diffusionPreFilter.connect(diffusionHighpass);
+      diffusionHighpass.connect(diffusionPanner);
       if (diffusionBus) {
         diffusionPanner.connect(diffusionBus.input);
       }
@@ -364,14 +392,20 @@ window.AudioLayers = (() => {
       smearFilter.type = "lowpass";
       smearFilter.frequency.value = Math.max(420, 6900 - audience.smearCutHz - layerBlend * 900);
 
+      const smearHighpass = audioContext.createBiquadFilter();
+      smearHighpass.type = "highpass";
+      smearHighpass.frequency.value = Math.max(120, 150 + distanceBlend * 78 + audience.directCutHz * 0.024);
+      smearHighpass.Q.value = 0.54;
+
       const smearPanner = audioContext.createStereoPanner();
-      smearPanner.pan.value = clamp(basePan * 0.28, -0.72, 0.72);
-      layerCleanupNodes.push(smearSend, smearPreDelay, smearFilter, smearPanner);
+      smearPanner.pan.value = clamp(basePan * (0.32 + distanceBlend * 0.08), -0.78, 0.78);
+      layerCleanupNodes.push(smearSend, smearPreDelay, smearFilter, smearHighpass, smearPanner);
 
       compressorNode.connect(smearSend);
       smearSend.connect(smearPreDelay);
       smearPreDelay.connect(smearFilter);
-      smearFilter.connect(smearPanner);
+      smearFilter.connect(smearHighpass);
+      smearHighpass.connect(smearPanner);
       smearPanner.connect(sharedBuses.smear.input);
     }
 
@@ -439,14 +473,20 @@ window.AudioLayers = (() => {
       reflectionFilter.type = "lowpass";
       reflectionFilter.frequency.value = Math.max(1200, 9000 - layerBlend * 1200);
 
+      const reflectionHighpass = audioContext.createBiquadFilter();
+      reflectionHighpass.type = "highpass";
+      reflectionHighpass.frequency.value = Math.max(170, 220 + distanceBlend * 155 + audience.directCutHz * 0.04);
+      reflectionHighpass.Q.value = 0.6;
+
       const reflectionPanner = audioContext.createStereoPanner();
-      reflectionPanner.pan.value = clamp(basePan * 0.52, -0.84, 0.84);
-      layerCleanupNodes.push(reflectionSend, reflectionPreDelay, reflectionFilter, reflectionPanner);
+      reflectionPanner.pan.value = clamp(basePan * (0.58 + distanceBlend * 0.12), -0.9, 0.9);
+      layerCleanupNodes.push(reflectionSend, reflectionPreDelay, reflectionFilter, reflectionHighpass, reflectionPanner);
 
       compressorNode.connect(reflectionSend);
       reflectionSend.connect(reflectionPreDelay);
       reflectionPreDelay.connect(reflectionFilter);
-      reflectionFilter.connect(reflectionPanner);
+      reflectionFilter.connect(reflectionHighpass);
+      reflectionHighpass.connect(reflectionPanner);
       reflectionPanner.connect(sharedBuses.reflection.input);
     }
   }

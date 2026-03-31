@@ -17,17 +17,6 @@ from .state import (
 
 def touch_path(path: Path) -> None:
     now = time.time()
-    try:
-        path.touch(exist_ok=True)
-        path.chmod(path.stat().st_mode)
-    except OSError:
-        pass
-
-    try:
-        if path.exists():
-            path.touch()
-    except OSError:
-        pass
 
     try:
         if path.parent.exists():
@@ -38,6 +27,8 @@ def touch_path(path: Path) -> None:
     try:
         if path.exists():
             os.utime(path, (now, now))
+        else:
+            path.touch(exist_ok=True)
     except OSError:
         pass
 
@@ -104,21 +95,28 @@ def collect_cache_entries() -> list[dict[str, object]]:
     return entries
 
 
+def collect_cache_inventory() -> tuple[list[dict[str, object]], int]:
+    entries = collect_cache_entries()
+    total_size = sum(int(entry["size"]) for entry in entries)
+    return entries, total_size
+
+
 def prune_cache(max_age_hours: int = MAX_CACHE_AGE_HOURS, max_cache_bytes: int = MAX_CACHE_BYTES) -> None:
     cutoff = time.time() - max_age_hours * 3600
+    entries, total_size = collect_cache_inventory()
 
-    for entry in collect_cache_entries():
+    for entry in entries:
         cache_dir = entry["path"]
         track_id = str(entry["track_id"])
         last_touch = max(float(entry["atime"]), float(entry["mtime"]))
         if entry["active"]:
             continue
         if last_touch and last_touch < cutoff:
+            total_size = max(0, total_size - int(entry["size"]))
             delete_cache_dir(cache_dir)
             TRACK_LAST_USED.pop(track_id, None)
             TRACKS.pop(track_id, None)
 
-    total_size = get_cache_size_bytes()
     if total_size <= max_cache_bytes:
         return
 
@@ -126,12 +124,15 @@ def prune_cache(max_age_hours: int = MAX_CACHE_AGE_HOURS, max_cache_bytes: int =
         max_cache_bytes,
         max(0, int(max_cache_bytes * CACHE_PRUNE_TARGET_RATIO)),
     )
-    entries = sorted(
-        collect_cache_entries(),
+    prunable_entries = sorted(
+        (
+            entry for entry in entries
+            if Path(entry["path"]).exists()
+        ),
         key=lambda item: max(float(item["atime"]), float(item["mtime"])),
     )
 
-    for entry in entries:
+    for entry in prunable_entries:
         if total_size <= target_cache_bytes:
             break
         if entry["active"]:
