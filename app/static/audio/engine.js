@@ -13,7 +13,10 @@ window.AudioEngine = (() => {
       setOutputVolume,
       setMasterBusProfile,
     } = window.AudioOutput;
+    const { ensureSharedEffectBus, syncSharedEffectBusUsage } = window.AudioBuses;
     const {
+      buildLayerComputationCache,
+      buildLayerVariationCache,
       getLayerBlend,
       getTrackVolume,
       getTrackEffectStrength,
@@ -102,6 +105,8 @@ window.AudioEngine = (() => {
     }
 
     return {
+      buildLayerComputationCache,
+      buildLayerVariationCache,
       getLayerBlend,
       getTrackVolume,
       getTrackEffectStrength,
@@ -115,6 +120,8 @@ window.AudioEngine = (() => {
       ensureOutputChain,
       setOutputVolume,
       setMasterBusProfile,
+      ensureSharedEffectBus,
+      syncSharedEffectBusUsage,
       rebuildPlayOrder,
       getCurrentPlaylistIndex,
       getCurrentPlaylistEntry,

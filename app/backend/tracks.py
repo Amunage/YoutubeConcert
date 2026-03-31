@@ -2,11 +2,40 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from pathlib import Path
 
 from .cache import mark_track_used, prune_cache
-from .state import ACTIVE_TRACK_IDS, CACHE_DIR, DOWNLOAD_LOCK, TRACKS, TrackRecord
+from .state import (
+    ACTIVE_TRACK_IDS,
+    CACHE_DIR,
+    DOWNLOAD_LOCK,
+    TRACK_LAST_USED,
+    TRACK_METADATA_MAX_IDLE_HOURS,
+    TRACKS,
+    TrackRecord,
+)
 from .youtube import run_yt_dlp
+
+
+def touch_track_metadata(track_id: str) -> None:
+    if not track_id:
+        return
+    TRACK_LAST_USED[track_id] = time.time()
+
+
+def evict_idle_track_metadata(max_idle_hours: int = TRACK_METADATA_MAX_IDLE_HOURS) -> None:
+    if max_idle_hours <= 0 or not TRACK_LAST_USED:
+        return
+
+    cutoff = time.time() - max_idle_hours * 3600
+    for track_id, last_used in list(TRACK_LAST_USED.items()):
+        if track_id in ACTIVE_TRACK_IDS:
+            continue
+        if last_used >= cutoff:
+            continue
+        TRACK_LAST_USED.pop(track_id, None)
+        TRACKS.pop(track_id, None)
 
 
 def prepare_track(url: str) -> TrackRecord:
@@ -14,10 +43,12 @@ def prepare_track(url: str) -> TrackRecord:
 
     with DOWNLOAD_LOCK:
         prune_cache()
+        evict_idle_track_metadata()
         existing = TRACKS.get(cache_key)
         if existing and Path(existing["path"]).exists():
             print(f"[cache] {existing['title']} | {url}")
             mark_track_used(Path(existing["path"]))
+            touch_track_metadata(cache_key)
             return existing
 
         ACTIVE_TRACK_IDS.add(cache_key)
@@ -47,31 +78,57 @@ def prepare_track(url: str) -> TrackRecord:
                 "path": str(audio_path),
             }
             TRACKS[cache_key] = track
+            touch_track_metadata(cache_key)
             mark_track_used(audio_path)
             print(f"[download] {title} | {url}")
             prune_cache()
+            evict_idle_track_metadata()
             return track
         finally:
             ACTIVE_TRACK_IDS.discard(cache_key)
 
 
 def get_track(track_id: str) -> TrackRecord | None:
-    return TRACKS.get(track_id)
+    track = TRACKS.get(track_id)
+    if track:
+        touch_track_metadata(track_id)
+    return track
 
 
 def read_track_bytes(track_id: str) -> tuple[Path, bytes] | None:
+    evict_idle_track_metadata()
     track = TRACKS.get(track_id)
     if not track:
         return None
 
     file_path = Path(track["path"])
     if not file_path.exists():
+        TRACK_LAST_USED.pop(track_id, None)
+        TRACKS.pop(track_id, None)
         return None
 
     ACTIVE_TRACK_IDS.add(track_id)
     try:
+        touch_track_metadata(track_id)
         mark_track_used(file_path)
         body = file_path.read_bytes()
         return file_path, body
     finally:
         ACTIVE_TRACK_IDS.discard(track_id)
+
+
+def get_track_path(track_id: str) -> Path | None:
+    evict_idle_track_metadata()
+    track = TRACKS.get(track_id)
+    if not track:
+        return None
+
+    file_path = Path(track["path"])
+    if not file_path.exists():
+        TRACK_LAST_USED.pop(track_id, None)
+        TRACKS.pop(track_id, None)
+        return None
+
+    touch_track_metadata(track_id)
+    mark_track_used(file_path)
+    return file_path

@@ -10,6 +10,7 @@ from .state import (
     CACHE_PRUNE_TARGET_RATIO,
     MAX_CACHE_AGE_HOURS,
     MAX_CACHE_BYTES,
+    TRACK_LAST_USED,
     TRACKS,
 )
 
@@ -114,6 +115,7 @@ def prune_cache(max_age_hours: int = MAX_CACHE_AGE_HOURS, max_cache_bytes: int =
             continue
         if last_touch and last_touch < cutoff:
             delete_cache_dir(cache_dir)
+            TRACK_LAST_USED.pop(track_id, None)
             TRACKS.pop(track_id, None)
 
     total_size = get_cache_size_bytes()
@@ -139,5 +141,6 @@ def prune_cache(max_age_hours: int = MAX_CACHE_AGE_HOURS, max_cache_bytes: int =
         track_id = str(entry["track_id"])
         size = int(entry["size"])
         delete_cache_dir(cache_dir)
+        TRACK_LAST_USED.pop(track_id, None)
         TRACKS.pop(track_id, None)
         total_size = max(0, total_size - size)

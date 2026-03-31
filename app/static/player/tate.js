@@ -38,6 +38,9 @@
     let activeNodes = [];
     let currentTrackId = null;
     let currentTrackUrl = "";
+    let prefetchedBufferTrackId = null;
+    let prefetchedBufferTrackUrl = "";
+    let prefetchedAudioBuffer = null;
     let playbackSettings = null;
     let playbackStartedAt = 0;
     let playbackOffset = 0;
@@ -51,11 +54,13 @@
     let playlistSourceUrl = "";
     let playlistCount = 0;
     let playlistEntryCache = {};
+    let playlistEntryLabels = [];
     let playOrder = [];
     let currentOrderPosition = 0;
     let statusTimer = null;
     let prefetchedTrackUrl = "";
     let prefetchInFlightUrl = "";
+    let predecodeInFlightUrl = "";
     let previousVolumeBeforeMute = 70;
     let isOriginalMode = false;
     let failedPlaylistEntryIndexes = new Set();
@@ -64,8 +69,18 @@
     let playbackSessionToken = 0;
     let hasPrimedAudioSession = false;
     let audioKeepAliveNode = null;
+    let trackPreviewRenderFrame = null;
+    let playlistSelectRenderKey = "";
+    let playlistEntryAccessTick = 0;
+    let playlistEntryAccessTimes = {};
+
+    const PLAYLIST_ENTRY_CACHE_LIMIT = 24;
+    const PLAYLIST_PRELOAD_BEHIND = 1;
+    const PLAYLIST_PRELOAD_AHEAD = 3;
 
     const {
+      buildLayerComputationCache,
+      buildLayerVariationCache,
       getLayerBlend,
       getTrackVolume,
       getTrackEffectStrength,
@@ -81,6 +96,8 @@
       updateMetaText,
       scheduleLayeredTrack,
       ensureOutputChain,
+      ensureSharedEffectBus,
+      syncSharedEffectBusUsage,
       setOutputVolume,
       setMasterBusProfile,
     } = window.AudioEngine;

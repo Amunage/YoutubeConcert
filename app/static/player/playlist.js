@@ -3,27 +3,111 @@
         return;
       }
 
-      playlistSelect.innerHTML = "";
-
       if (!playlistCount || playlistCount <= 1) {
-        const option = document.createElement("option");
-        option.value = "";
-        option.textContent = "\uC7AC\uC0DD\uBAA9\uB85D";
-        playlistSelect.appendChild(option);
+        const nextKey = "single";
+        if (playlistSelectRenderKey !== nextKey) {
+          playlistSelect.innerHTML = "";
+          const option = document.createElement("option");
+          option.value = "";
+          option.textContent = "\uC7AC\uC0DD\uBAA9\uB85D";
+          playlistSelect.appendChild(option);
+          playlistSelectRenderKey = nextKey;
+        }
         playlistSelect.disabled = true;
         return;
       }
 
+      const labels = [];
       for (let index = 0; index < playlistCount; index += 1) {
-        const option = document.createElement("option");
-        option.value = String(index);
-        option.textContent = getPlaylistOptionLabel(index);
-        playlistSelect.appendChild(option);
+        labels.push(getPlaylistOptionLabel(index));
+      }
+      const nextKey = `${playlistCount}:${labels.join("\n")}`;
+
+      if (playlistSelectRenderKey !== nextKey) {
+        const fragment = document.createDocumentFragment();
+        for (let index = 0; index < playlistCount; index += 1) {
+          const option = document.createElement("option");
+          option.value = String(index);
+          option.textContent = labels[index];
+          fragment.appendChild(option);
+        }
+        playlistSelect.innerHTML = "";
+        playlistSelect.appendChild(fragment);
+        playlistSelectRenderKey = nextKey;
       }
 
       const currentIndex = getCurrentPlaylistIndex();
       playlistSelect.value = currentIndex === null ? "0" : String(currentIndex);
       playlistSelect.disabled = false;
+    }
+
+    function markPlaylistEntryAccess(index) {
+      if (index === null || index === undefined) {
+        return;
+      }
+      playlistEntryAccessTick += 1;
+      playlistEntryAccessTimes[index] = playlistEntryAccessTick;
+    }
+
+    function getPlaylistPreloadIndexes(centerOrderPosition = currentOrderPosition) {
+      const indexes = new Set();
+      if (!playlistCount || playlistCount <= 1) {
+        return indexes;
+      }
+
+      const safeCenter = Number.isInteger(centerOrderPosition) ? centerOrderPosition : currentOrderPosition;
+      for (let offset = -PLAYLIST_PRELOAD_BEHIND; offset <= PLAYLIST_PRELOAD_AHEAD; offset += 1) {
+        const orderPosition = getStepwiseOrderPosition(safeCenter, 1, offset);
+        if (orderPosition === null) {
+          continue;
+        }
+        const entryIndex = playOrder[orderPosition];
+        if (entryIndex !== null && entryIndex !== undefined) {
+          indexes.add(entryIndex);
+        }
+      }
+
+      const currentIndex = getCurrentPlaylistIndex();
+      if (currentIndex !== null) {
+        indexes.add(currentIndex);
+      }
+      indexes.add(0);
+      return indexes;
+    }
+
+    function trimPlaylistEntryCache(anchorIndexes = []) {
+      const cachedIndexes = Object.keys(playlistEntryCache);
+      if (cachedIndexes.length <= PLAYLIST_ENTRY_CACHE_LIMIT) {
+        return;
+      }
+
+      const protectedIndexes = getPlaylistPreloadIndexes();
+      anchorIndexes.forEach((index) => {
+        if (index !== null && index !== undefined) {
+          protectedIndexes.add(index);
+        }
+      });
+
+      const evictable = cachedIndexes
+        .map((value) => Number.parseInt(value, 10))
+        .filter((index) => !Number.isNaN(index) && !protectedIndexes.has(index))
+        .sort((left, right) => (playlistEntryAccessTimes[left] || 0) - (playlistEntryAccessTimes[right] || 0));
+
+      while (Object.keys(playlistEntryCache).length > PLAYLIST_ENTRY_CACHE_LIMIT && evictable.length) {
+        const evictIndex = evictable.shift();
+        delete playlistEntryCache[evictIndex];
+        delete playlistEntryAccessTimes[evictIndex];
+      }
+    }
+
+    function cachePlaylistEntry(index, entry, options = {}) {
+      if (index === null || index === undefined || !entry || !entry.url) {
+        return;
+      }
+
+      playlistEntryCache[index] = entry;
+      markPlaylistEntryAccess(index);
+      trimPlaylistEntryCache(options.anchorIndexes || [index]);
     }
 
     function preloadPlaylistEntriesInBackground() {
@@ -32,8 +116,9 @@
       }
 
       queueMicrotask(async () => {
-        for (let index = 0; index < playlistCount; index += 1) {
+        for (const index of getPlaylistPreloadIndexes()) {
           if (playlistEntryCache[index]) {
+            markPlaylistEntryAccess(index);
             continue;
           }
           try {
@@ -46,7 +131,12 @@
     }
 
     function seedPlaylistEntries(entries = []) {
+      clearPrefetchedAudioBuffer();
       playlistEntryCache = {};
+      playlistEntryLabels = [];
+      playlistSelectRenderKey = "";
+      playlistEntryAccessTimes = {};
+      playlistEntryAccessTick = 0;
       failedPlaylistEntryIndexes = new Set();
       if (!Array.isArray(entries)) {
         updateTrackThumbnail(null);
@@ -54,10 +144,22 @@
       }
 
       entries.forEach((entry, index) => {
+        const title = String(entry?.title || "").trim();
+        playlistEntryLabels[index] = title || `${index + 1}. \uC7AC\uC0DD\uBAA9\uB85D \uD56D\uBAA9`;
+      });
+
+      entries.slice(0, PLAYLIST_ENTRY_CACHE_LIMIT).forEach((entry, index) => {
         if (entry && entry.url) {
-          playlistEntryCache[index] = entry;
+          cachePlaylistEntry(index, entry, { anchorIndexes: [index, 0] });
         }
       });
+    }
+
+    function clearPrefetchedAudioBuffer() {
+      prefetchedBufferTrackId = null;
+      prefetchedBufferTrackUrl = "";
+      prefetchedAudioBuffer = null;
+      predecodeInFlightUrl = "";
     }
 
     function clearPlaylistEntryFailure(index) {
@@ -141,11 +243,15 @@
 
     async function ensurePlaylistEntry(index) {
       if (playlistEntryCache[index]) {
+        markPlaylistEntryAccess(index);
         return playlistEntryCache[index];
       }
 
       const data = await fetchPlaylistEntry(playlistSourceUrl, index + 1);
-      playlistEntryCache[index] = data.entry;
+      if (data?.entry?.title) {
+        playlistEntryLabels[index] = String(data.entry.title).trim() || playlistEntryLabels[index];
+      }
+      cachePlaylistEntry(index, data.entry, { anchorIndexes: [index] });
       refreshPlaylistSelect();
       return data.entry;
     }
@@ -154,6 +260,7 @@
       if (playlistCount <= 1 || !playOrder.length) {
         prefetchedTrackUrl = "";
         prefetchInFlightUrl = "";
+        clearPrefetchedAudioBuffer();
         return;
       }
 
@@ -161,6 +268,7 @@
       if (nextOrderPosition === null) {
         prefetchedTrackUrl = "";
         prefetchInFlightUrl = "";
+        clearPrefetchedAudioBuffer();
         return;
       }
 
@@ -178,15 +286,38 @@
       }
 
       const targetUrl = nextEntry.url;
+      if (prefetchedBufferTrackUrl === targetUrl && prefetchedAudioBuffer) {
+        prefetchedTrackUrl = targetUrl;
+        return;
+      }
+      if (predecodeInFlightUrl === targetUrl) {
+        return;
+      }
       prefetchInFlightUrl = targetUrl;
 
       try {
-        await fetchPreparedTrack(targetUrl);
+        const prepared = await fetchPreparedTrack(targetUrl);
         prefetchedTrackUrl = targetUrl;
+        predecodeInFlightUrl = targetUrl;
+        try {
+          const decoded = await loadAudioBuffer(prepared.id);
+          if (predecodeInFlightUrl === targetUrl) {
+            prefetchedBufferTrackId = prepared.id;
+            prefetchedBufferTrackUrl = targetUrl;
+            prefetchedAudioBuffer = decoded;
+          }
+        } finally {
+          if (predecodeInFlightUrl === targetUrl) {
+            predecodeInFlightUrl = "";
+          }
+        }
       } catch (error) {
         console.warn("prefetch skipped", error);
         if (prefetchedTrackUrl === targetUrl) {
           prefetchedTrackUrl = "";
+        }
+        if (prefetchedBufferTrackUrl === targetUrl) {
+          clearPrefetchedAudioBuffer();
         }
       } finally {
         if (prefetchInFlightUrl === targetUrl) {
@@ -202,8 +333,13 @@
         prefetchedTrackUrl = "";
       }
 
-      if (!currentBuffer || currentTrackId !== prepared.id) {
+      if (prefetchedBufferTrackId === prepared.id && prefetchedBufferTrackUrl === entry.url && prefetchedAudioBuffer) {
+        currentBuffer = prefetchedAudioBuffer;
+        clearPrefetchedAudioBuffer();
+      } else if (!currentBuffer || currentTrackId !== prepared.id) {
         currentBuffer = await loadAudioBuffer(prepared.id);
+      } else if (prefetchedBufferTrackUrl === entry.url) {
+        clearPrefetchedAudioBuffer();
       }
       currentTrackId = prepared.id;
       clearPlaylistEntryFailure(entryIndex);

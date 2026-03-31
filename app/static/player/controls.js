@@ -28,6 +28,17 @@
       );
     }
 
+    function scheduleTrackPreviewRender() {
+      if (trackPreviewRenderFrame) {
+        cancelAnimationFrame(trackPreviewRenderFrame);
+      }
+
+      trackPreviewRenderFrame = requestAnimationFrame(() => {
+        trackPreviewRenderFrame = null;
+        renderTrackPreviewFromInputs();
+      });
+    }
+
     function needsReload() {
       const inputUrl = youtubeUrlInput.value.trim();
       return !isPrepared || !currentBuffer || !inputUrl || inputUrl !== playlistSourceUrl;
@@ -64,7 +75,7 @@
         }
         await ensureAudioContext();
         const currentPosition = getCurrentPlaybackPosition();
-        playCurrentBuffer(currentPosition);
+        playCurrentBuffer(currentPosition, { crossfadeFromCurrent: true });
         setStatus("<strong>\uC124\uC815 \uC801\uC6A9</strong> \uD604\uC7AC \uC7AC\uC0DD\uC5D0 \uBC14\uB85C \uBC18\uC601\uD588\uC2B5\uB2C8\uB2E4.");
         return;
       }
@@ -105,9 +116,6 @@
         playlistSourceUrl = url;
         playlistCount = resolved.playlistCount || 1;
         seedPlaylistEntries(resolved.entries || []);
-        if (resolved.firstEntry) {
-          playlistEntryCache[resolved.firstEntryIndex || 0] = resolved.firstEntry;
-        }
         refreshPlaylistSelect();
         if (!playlistCount) {
           throw new Error("\uC7AC\uC0DD \uAC00\uB2A5\uD55C \uACE1\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
@@ -219,7 +227,7 @@
       if (isPlaying) {
         await ensureAudioContext({ primeSession: true });
         const currentPosition = getCurrentPlaybackPosition();
-        playCurrentBuffer(currentPosition);
+        playCurrentBuffer(currentPosition, { crossfadeFromCurrent: true });
       } else {
         applyCurrentMasterBusProfile(playbackSettings);
       }
@@ -300,7 +308,7 @@
       applyCurrentVolumeToOutput();
     });
     if (ensembleVolumeInput) {
-      ensembleVolumeInput.addEventListener("input", renderTrackPreviewFromInputs);
+      ensembleVolumeInput.addEventListener("input", scheduleTrackPreviewRender);
     }
     if (muteButton) {
       muteButton.addEventListener("click", toggleMute);
@@ -460,7 +468,7 @@
     updatePlayerVolumeUI();
     normalizeToggleLabels();
     refreshOriginalToggleButton();
-    renderTrackPreviewFromInputs();
+    scheduleTrackPreviewRender();
     refreshToggleChips();
     installMediaSessionHandlers();
     updateMediaSessionMetadata();

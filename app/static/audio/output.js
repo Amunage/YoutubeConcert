@@ -35,6 +35,8 @@ window.AudioOutput = (() => {
 
       outputChainState.set(context, {
         effectBuses: new Map(),
+        activeEffectBusKeys: new Map(),
+        effectBusCleanupTimers: new Map(),
         mixInput,
         outputGain,
         busCompressor,

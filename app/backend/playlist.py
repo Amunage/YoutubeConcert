@@ -1,8 +1,37 @@
 from __future__ import annotations
 
+import copy
 import json
+import time
 
 from .youtube import run_yt_dlp_resolve
+
+
+RESOLVE_CACHE_TTL_SECONDS = 300
+RESOLVE_CACHE_MAX_ENTRIES = 128
+RESOLVE_CACHE: dict[str, tuple[float, object]] = {}
+
+
+def get_resolve_cache(cache_key: str) -> object | None:
+    cached = RESOLVE_CACHE.get(cache_key)
+    if not cached:
+        return None
+
+    cached_at, payload = cached
+    if time.monotonic() - cached_at > RESOLVE_CACHE_TTL_SECONDS:
+        RESOLVE_CACHE.pop(cache_key, None)
+        return None
+
+    return copy.deepcopy(payload)
+
+
+def set_resolve_cache(cache_key: str, payload: object) -> None:
+    RESOLVE_CACHE[cache_key] = (time.monotonic(), copy.deepcopy(payload))
+    if len(RESOLVE_CACHE) <= RESOLVE_CACHE_MAX_ENTRIES:
+        return
+
+    oldest_key = min(RESOLVE_CACHE.items(), key=lambda item: item[1][0])[0]
+    RESOLVE_CACHE.pop(oldest_key, None)
 
 
 def build_playlist_entry(item: dict[str, object]) -> dict[str, str] | None:
@@ -27,6 +56,10 @@ def build_playlist_entry(item: dict[str, object]) -> dict[str, str] | None:
 
 
 def resolve_input_url(url: str) -> dict[str, object]:
+    cached = get_resolve_cache(f"resolve:{url}")
+    if cached:
+        return cached
+
     result = run_yt_dlp_resolve(url)
     if result.returncode != 0:
         stderr = result.stderr.strip() or result.stdout.strip() or "yt-dlp resolve failed"
@@ -54,7 +87,7 @@ def resolve_input_url(url: str) -> dict[str, object]:
         raise RuntimeError("?ъ깮 媛?ν븳 ?좏뒠釉???ぉ??李얠? 紐삵뻽?듬땲??")
 
     playlist_count = int(data.get("playlist_count") or data.get("n_entries") or len(entries) or 1)
-    return {
+    resolved = {
         "title": str(data.get("title") or entries[0]["title"] or "Playlist"),
         "playlist_count": playlist_count,
         "entries": entries,
@@ -62,9 +95,15 @@ def resolve_input_url(url: str) -> dict[str, object]:
         "first_entry_index": 0,
         "is_playlist": playlist_count > 1,
     }
+    set_resolve_cache(f"resolve:{url}", resolved)
+    return resolved
 
 
 def resolve_playlist_entry(url: str, index: int) -> dict[str, str]:
+    cached = get_resolve_cache(f"playlist-entry:{url}:{index}")
+    if cached:
+        return cached
+
     result = run_yt_dlp_resolve(url, playlist_item=index)
     if result.returncode != 0:
         stderr = result.stderr.strip() or result.stdout.strip() or "yt-dlp resolve failed"
@@ -80,10 +119,12 @@ def resolve_playlist_entry(url: str, index: int) -> dict[str, str]:
         for item in raw_entries:
             entry = build_playlist_entry(item)
             if entry:
+                set_resolve_cache(f"playlist-entry:{url}:{index}", entry)
                 return entry
 
     single_entry = build_playlist_entry(data)
     if single_entry:
+        set_resolve_cache(f"playlist-entry:{url}:{index}", single_entry)
         return single_entry
 
     raise RuntimeError("?대떦 ?쒖꽌??怨≪쓣 李얠? 紐삵뻽?듬땲??")

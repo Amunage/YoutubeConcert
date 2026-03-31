@@ -82,23 +82,65 @@ window.AudioLayers = (() => {
     };
   }
 
+  function buildLayerVariationCache(variationSeedBase, trackCount, roomPreset, audiencePreset) {
+    const totalTracks = Math.max(1, trackCount || 1);
+    const cache = [];
+
+    for (let index = 0; index < totalTracks; index += 1) {
+      cache.push(getLayerVariation(variationSeedBase, index, totalTracks, roomPreset, audiencePreset));
+    }
+
+    return cache;
+  }
+
+  function buildLayerComputationCache(trackCount, baseVolume, volumeDecay, reverbIntensity, peakSuppression, audiencePreset) {
+    const totalTracks = Math.max(1, trackCount || 1);
+    const cache = {
+      layerBlends: [],
+      trackVolumes: [],
+      shapedVolumes: [],
+      audienceTracks: [],
+      reverbStrengths: [],
+      suppressionStrengths: [],
+    };
+
+    for (let index = 0; index < totalTracks; index += 1) {
+      const layerBlend = getLayerBlend(index, totalTracks);
+      const audienceTrack = getAudienceTrackProfile(audiencePreset, index, totalTracks);
+      const trackVolume = getTrackVolume(baseVolume, volumeDecay, index);
+      cache.layerBlends.push(layerBlend);
+      cache.trackVolumes.push(trackVolume);
+      cache.shapedVolumes.push((trackVolume / 100) * Math.max(0.24, 1 - index * 0.08));
+      cache.audienceTracks.push(audienceTrack);
+      cache.reverbStrengths.push(clamp(getTrackEffectStrength(reverbIntensity, index) + audienceTrack.reverbExtra, 0, 100));
+      cache.suppressionStrengths.push(clamp(getTrackEffectStrength(peakSuppression, index) + audienceTrack.suppressionExtra, 0, 100));
+    }
+
+    return cache;
+  }
+
   function scheduleLayeredTrack(buffer, startTime, offsetSeconds, volume, layerIndex, delayMs, reverbIntensity, peakSuppression, roomPreset, audiencePreset, effectOptions = {}) {
     const source = audioContext.createBufferSource();
     source.buffer = buffer;
 
-    const variationSeedBase = effectOptions.variationSeedBase || "";
+    const playbackContext = effectOptions.playbackContext || {};
+    const variationSeedBase = playbackContext.variationSeedBase ?? effectOptions.variationSeedBase ?? "";
     const reverbAmount = clamp(effectOptions.reverbAmount ?? reverbIntensity, 0, 100) / 100;
     const diffusionAmount = clamp(effectOptions.diffusionAmount ?? 100, 0, 100) / 100;
     const auxiliaryAmount = clamp(effectOptions.auxiliaryAmount ?? 100, 0, 100) / 100;
-    const trackCount = playbackSettings?.count || (layerIndex + 1);
-    const layerBlend = getLayerBlend(layerIndex, trackCount);
-    const layerVariation = getLayerVariation(variationSeedBase, layerIndex, trackCount, roomPreset, audiencePreset);
+    const trackCount = playbackContext.trackCount ?? playbackSettings?.count ?? (layerIndex + 1);
+    const layerCache = playbackContext.layerCache || null;
+    const layerBlend = layerCache?.layerBlends?.[layerIndex] ?? getLayerBlend(layerIndex, trackCount);
+    const layerVariation = playbackContext.layerVariationCache?.[layerIndex]
+      || getLayerVariation(variationSeedBase, layerIndex, trackCount, roomPreset, audiencePreset);
     const layerStartTime = Math.max(0, startTime + layerVariation.timingJitterMs / 1000);
-    const audienceTrack = getAudienceTrackProfile(audiencePreset, layerIndex, trackCount);
-    const reverbDrive = clamp(getTrackEffectStrength(reverbIntensity, layerIndex) + audienceTrack.reverbExtra, 0, 100);
-    const suppressionDrive = clamp(getTrackEffectStrength(peakSuppression, layerIndex) + audienceTrack.suppressionExtra, 0, 100);
-    const preset = getRoomPresetConfig(roomPreset);
-    const audience = getAudiencePresetConfig(audiencePreset);
+    const preset = playbackContext.preset || getRoomPresetConfig(roomPreset);
+    const audience = playbackContext.audience || getAudiencePresetConfig(audiencePreset);
+    const effectiveDelayMs = playbackContext.effectiveDelayMs ?? (delayMs * audience.delayScale);
+    const sharedBuses = playbackContext.sharedBuses || null;
+    const audienceTrack = layerCache?.audienceTracks?.[layerIndex] || getAudienceTrackProfile(audiencePreset, layerIndex, trackCount);
+    const reverbDrive = layerCache?.reverbStrengths?.[layerIndex] ?? clamp(getTrackEffectStrength(reverbIntensity, layerIndex) + audienceTrack.reverbExtra, 0, 100);
+    const suppressionDrive = layerCache?.suppressionStrengths?.[layerIndex] ?? clamp(getTrackEffectStrength(peakSuppression, layerIndex) + audienceTrack.suppressionExtra, 0, 100);
     const complexityProfile = getComplexityProfile(trackCount, roomPreset, audiencePreset, reverbDrive);
     const distanceBlend = clamp(layerBlend * (0.42 + preset.distanceEq) + audience.distanceOffset, 0, 1.25);
     const basePan = clamp(
@@ -107,7 +149,6 @@ window.AudioLayers = (() => {
       0.84
     );
     const adjustedVolume = volume * audienceTrack.volumeScale * layerVariation.gainScale;
-    const effectiveDelayMs = delayMs * audience.delayScale;
     const directMixLevel = audience.directMixTrim * Math.max(0.82, 1 - layerBlend * 0.12);
 
     const lowpassNode = audioContext.createBiquadFilter();
@@ -192,7 +233,7 @@ window.AudioLayers = (() => {
     const wetMix = preset.wetMix * audience.wetMix * reverbAmount * (0.48 + reverbDrive / 92) * (0.42 + layerBlend * 0.78);
     const earlyWetMix = wetMix * preset.earlyWetMix * Math.max(0.58, 0.96 - distanceBlend * 0.16);
     if (earlyWetMix > 0.008) {
-      const earlyBus = ensureSharedEffectBus("early", { roomPreset });
+      const earlyBus = sharedBuses?.early || ensureSharedEffectBus("early", { roomPreset });
       const earlySendGain = audioContext.createGain();
       earlySendGain.gain.value = Math.min(0.26, earlyWetMix * 0.48 * audience.tailGainScale);
 
@@ -229,7 +270,7 @@ window.AudioLayers = (() => {
 
     const lateWetMix = wetMix * preset.lateWetMix * (0.72 + distanceBlend * 0.16) * complexityProfile.lateWetScale;
     if (lateWetMix > 0.01) {
-      const lateBus = ensureSharedEffectBus("late", { roomPreset });
+      const lateBus = sharedBuses?.late || ensureSharedEffectBus("late", { roomPreset });
       const lateSendGain = audioContext.createGain();
       lateSendGain.gain.value = Math.min(0.34, lateWetMix * 0.58 * audience.tailGainScale);
 
@@ -261,7 +302,7 @@ window.AudioLayers = (() => {
 
     const diffusionMix = audience.diffusionMix * diffusionAmount * (0.42 + reverbDrive / 110) * (0.62 + distanceBlend * 0.42);
     if (diffusionMix > 0.02 && complexityProfile.allowDiffusion) {
-      const diffusionBus = ensureSharedEffectBus("diffusion", {
+      const diffusionBus = sharedBuses?.diffusion || ensureSharedEffectBus("diffusion", {
         roomPreset,
         audiencePreset,
         timesMs: audience.diffusionTimesMs,
@@ -306,61 +347,32 @@ window.AudioLayers = (() => {
           getAuxiliaryTapCount((audience.smearTapMs || []).length, trackCount, layerBlend, 2, complexityProfile.tapDensityScale)
         )
       : [];
-    for (let smearIndex = 0; smearIndex < smearPattern.length; smearIndex += 1) {
-      const smearTargetGain =
+    if (smearPattern.length && sharedBuses?.smear) {
+      const smearDensity = smearPattern.length / Math.max(1, (audience.smearTapMs || []).length);
+      const smearSend = audioContext.createGain();
+      smearSend.gain.value =
         adjustedVolume *
         auxiliaryAmount *
         audience.smearGain *
-        Math.max(0.022, 0.115 - smearIndex * 0.011) *
-        (0.78 + layerBlend * 0.22) *
-        (smearIndex % 2 === 0 ? 0.94 : 1.06);
-      if (smearTargetGain < 0.0035) {
-        continue;
-      }
-      const smearDelay = (
-        smearPattern[smearIndex] +
-        layerBlend * 10 +
-        effectiveDelayMs * 0.012 +
-        (smearIndex % 3) * 2.3
-      ) / 1000;
-      const smearFade = (audience.layerFadeMs * 0.95 + smearIndex * 21) / 1000;
+        Math.max(0.03, 0.14 * smearDensity) *
+        (0.78 + layerBlend * 0.22);
 
-      const smearSource = audioContext.createBufferSource();
-      smearSource.buffer = buffer;
-      smearSource.playbackRate.value = layerVariation.playbackRate * (1 + ((smearIndex % 3) - 1) * 0.0025);
+      const smearPreDelay = audioContext.createDelay(0.24);
+      smearPreDelay.delayTime.value = Math.max(0, (layerBlend * 10 + effectiveDelayMs * 0.012) / 1000);
 
       const smearFilter = audioContext.createBiquadFilter();
       smearFilter.type = "lowpass";
-      smearFilter.frequency.value = Math.max(
-        320,
-        6900 - audience.smearCutHz - smearIndex * 430 - layerBlend * 900 - (smearIndex % 2 === 0 ? 180 : 0)
-      );
+      smearFilter.frequency.value = Math.max(420, 6900 - audience.smearCutHz - layerBlend * 900);
 
       const smearPanner = audioContext.createStereoPanner();
-      smearPanner.pan.value = clamp(
-        basePan * 0.3 + (smearIndex % 2 === 0 ? -1 : 1) * (0.035 + smearIndex * 0.008) * audience.stereoWidth,
-        -0.78,
-        0.78
-      );
+      smearPanner.pan.value = clamp(basePan * 0.28, -0.72, 0.72);
+      layerCleanupNodes.push(smearSend, smearPreDelay, smearFilter, smearPanner);
 
-      const smearGain = audioContext.createGain();
-      const smearTrimGain = audioContext.createGain();
-      smearTrimGain.gain.value = 1;
-      smearGain.gain.setValueAtTime(0, Math.max(0, layerStartTime + smearDelay - 0.01));
-      smearGain.gain.linearRampToValueAtTime(smearTargetGain, layerStartTime + smearDelay + smearFade);
-
-      smearSource.connect(smearFilter);
-      smearFilter.connect(smearGain);
-      smearGain.connect(smearTrimGain);
-      smearTrimGain.connect(smearPanner);
-      connectToOutput(smearPanner);
-
-      smearSource.start(layerStartTime + smearDelay, offsetSeconds);
-      activeNodes.push({
-        source: smearSource,
-        trimNode: smearTrimGain,
-        cleanup: createDisconnectCleanup([smearSource, smearFilter, smearGain, smearTrimGain, smearPanner]),
-      });
+      compressorNode.connect(smearSend);
+      smearSend.connect(smearPreDelay);
+      smearPreDelay.connect(smearFilter);
+      smearFilter.connect(smearPanner);
+      smearPanner.connect(sharedBuses.smear.input);
     }
 
     const transientBlurPattern = auxiliaryAmount > 0
@@ -369,54 +381,38 @@ window.AudioLayers = (() => {
           getAuxiliaryTapCount((audience.transientBlurTapMs || []).length, trackCount, layerBlend, 1, complexityProfile.tapDensityScale)
         )
       : [];
-    for (let blurIndex = 0; blurIndex < transientBlurPattern.length; blurIndex += 1) {
-      const blurTargetGain =
+    if (transientBlurPattern.length && sharedBuses?.blur) {
+      const blurDensity = transientBlurPattern.length / Math.max(1, (audience.transientBlurTapMs || []).length);
+      const blurSend = audioContext.createGain();
+      blurSend.gain.value =
         adjustedVolume *
         auxiliaryAmount *
         audience.transientBlurGain *
-        Math.max(0.02, 0.085 - blurIndex * 0.012) *
+        Math.max(0.03, 0.11 * blurDensity) *
         (0.82 + layerBlend * 0.18);
-      if (blurTargetGain < 0.0035) {
-        continue;
-      }
-      const blurDelay = (transientBlurPattern[blurIndex] + blurIndex * 1.7 + layerBlend * 4.5) / 1000;
-      const blurFade = (18 + blurIndex * 14 + audience.layerFadeMs * 0.2) / 1000;
 
-      const blurSource = audioContext.createBufferSource();
-      blurSource.buffer = buffer;
-      blurSource.playbackRate.value = layerVariation.playbackRate * (1 + ((blurIndex % 2 === 0 ? -1 : 1) * 0.0018));
+      const blurPreDelay = audioContext.createDelay(0.12);
+      blurPreDelay.delayTime.value = Math.max(0, layerBlend * 4.5 / 1000);
 
       const blurFilter = audioContext.createBiquadFilter();
       blurFilter.type = "bandpass";
-      blurFilter.frequency.value = 2200 + blurIndex * 460 + layerBlend * 360;
+      blurFilter.frequency.value = 2200 + layerBlend * 360;
       blurFilter.Q.value = 0.72;
 
       const blurTone = audioContext.createBiquadFilter();
       blurTone.type = "lowpass";
-      blurTone.frequency.value = Math.max(1400, 5600 - blurIndex * 460 - audience.directCutHz * 0.5);
+      blurTone.frequency.value = Math.max(1400, 5600 - audience.directCutHz * 0.5);
 
       const blurPanner = audioContext.createStereoPanner();
-      blurPanner.pan.value = clamp(basePan * 0.22 + (blurIndex % 2 === 0 ? -1 : 1) * 0.045, -0.7, 0.7);
+      blurPanner.pan.value = clamp(basePan * 0.2, -0.66, 0.66);
+      layerCleanupNodes.push(blurSend, blurPreDelay, blurFilter, blurTone, blurPanner);
 
-      const blurGain = audioContext.createGain();
-      const blurTrimGain = audioContext.createGain();
-      blurTrimGain.gain.value = 1;
-      blurGain.gain.setValueAtTime(0, Math.max(0, layerStartTime + blurDelay - 0.01));
-      blurGain.gain.linearRampToValueAtTime(blurTargetGain, layerStartTime + blurDelay + blurFade);
-
-      blurSource.connect(blurFilter);
+      compressorNode.connect(blurSend);
+      blurSend.connect(blurPreDelay);
+      blurPreDelay.connect(blurFilter);
       blurFilter.connect(blurTone);
-      blurTone.connect(blurGain);
-      blurGain.connect(blurTrimGain);
-      blurTrimGain.connect(blurPanner);
-      connectToOutput(blurPanner);
-
-      blurSource.start(layerStartTime + blurDelay, offsetSeconds);
-      activeNodes.push({
-        source: blurSource,
-        trimNode: blurTrimGain,
-        cleanup: createDisconnectCleanup([blurSource, blurFilter, blurTone, blurGain, blurTrimGain, blurPanner]),
-      });
+      blurTone.connect(blurPanner);
+      blurPanner.connect(sharedBuses.blur.input);
     }
 
     const reflectionPattern = auxiliaryAmount > 0
@@ -425,41 +421,39 @@ window.AudioLayers = (() => {
           getAuxiliaryTapCount((preset.earlyReflectionsMs || []).length, trackCount, layerBlend, 1, complexityProfile.tapDensityScale)
         )
       : [];
-    for (let reflectionIndex = 0; reflectionIndex < reflectionPattern.length; reflectionIndex += 1) {
-      const reflectionDelay = audioContext.createDelay(0.35);
-      reflectionDelay.delayTime.value = (
-        (reflectionPattern[reflectionIndex] * audience.reflectionSpacing) +
-        layerBlend * 12 +
-        layerIndex * 2.5 +
-        effectiveDelayMs * 0.02
-      ) / 1000;
+    if (reflectionPattern.length && sharedBuses?.reflection) {
+      const reflectionDensity = reflectionPattern.length / Math.max(1, (preset.earlyReflectionsMs || []).length);
+      const reflectionSend = audioContext.createGain();
+      reflectionSend.gain.value =
+        adjustedVolume *
+        auxiliaryAmount *
+        Math.max(0.02, 0.18 * reflectionDensity) *
+        Math.max(0.18, 1 - distanceBlend * 0.28) *
+        (0.7 + layerBlend * 0.45) *
+        audience.reflectionBoost;
+
+      const reflectionPreDelay = audioContext.createDelay(0.2);
+      reflectionPreDelay.delayTime.value = Math.max(0, (layerBlend * 12 + layerIndex * 2.5 + effectiveDelayMs * 0.02) / 1000);
 
       const reflectionFilter = audioContext.createBiquadFilter();
       reflectionFilter.type = "lowpass";
-      reflectionFilter.frequency.value = Math.max(1000, 9000 - reflectionIndex * 600 - layerBlend * 1200);
+      reflectionFilter.frequency.value = Math.max(1200, 9000 - layerBlend * 1200);
 
       const reflectionPanner = audioContext.createStereoPanner();
-      reflectionPanner.pan.value = getReflectionPan(basePan, reflectionIndex, preset.reflectionWidth * audience.stereoWidth);
+      reflectionPanner.pan.value = clamp(basePan * 0.52, -0.84, 0.84);
+      layerCleanupNodes.push(reflectionSend, reflectionPreDelay, reflectionFilter, reflectionPanner);
 
-      const reflectionGain = audioContext.createGain();
-      const reflectionTrimGain = audioContext.createGain();
-      reflectionTrimGain.gain.value = 1;
-      reflectionGain.gain.value = adjustedVolume * auxiliaryAmount * Math.max(0.018, 0.17 - reflectionIndex * 0.026) * Math.max(0.18, 1 - distanceBlend * 0.28) * (0.7 + layerBlend * 0.45) * audience.reflectionBoost;
-
-      source.connect(reflectionDelay);
-      reflectionDelay.connect(reflectionFilter);
-      reflectionFilter.connect(reflectionGain);
-      reflectionGain.connect(reflectionTrimGain);
-      reflectionTrimGain.connect(reflectionPanner);
-      connectToOutput(reflectionPanner);
-      activeNodes.push({
-        trimNode: reflectionTrimGain,
-        cleanup: createDisconnectCleanup([reflectionDelay, reflectionFilter, reflectionGain, reflectionTrimGain, reflectionPanner]),
-      });
+      compressorNode.connect(reflectionSend);
+      reflectionSend.connect(reflectionPreDelay);
+      reflectionPreDelay.connect(reflectionFilter);
+      reflectionFilter.connect(reflectionPanner);
+      reflectionPanner.connect(sharedBuses.reflection.input);
     }
   }
 
   return {
+    buildLayerComputationCache,
+    buildLayerVariationCache,
     getLayerBlend,
     getTrackVolume,
     getTrackEffectStrength,

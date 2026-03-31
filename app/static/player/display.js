@@ -40,6 +40,11 @@
     }
 
     function getPlaylistOptionLabel(index) {
+      const lightweightLabel = playlistEntryLabels[index];
+      if (lightweightLabel) {
+        return `${index + 1}. ${lightweightLabel}`;
+      }
+
       const entry = playlistEntryCache[index];
       if (entry?.title) {
         return `${index + 1}. ${entry.title}`;
@@ -175,13 +180,26 @@
       const audience = getAudiencePresetConfig(audiencePreset);
       const effectiveDelayMs = Math.round(delayMs * audience.delayScale);
       const variationSeedBase = currentTrackId || currentTrackUrl || "preview";
+      const layerCache = buildLayerComputationCache(
+        count,
+        baseVolume,
+        volumeDecay,
+        reverbIntensity,
+        peakSuppression,
+        audiencePreset
+      );
+      const layerVariationCache = buildLayerVariationCache(
+        variationSeedBase,
+        count,
+        roomPreset,
+        audiencePreset
+      );
 
       for (let index = 0; index < count; index += 1) {
-        const layerBlend = getLayerBlend(index, count);
-        const layerVariation = getLayerVariation(variationSeedBase, index, count, roomPreset, audiencePreset);
-        const audienceTrack = getAudienceTrackProfile(audiencePreset, index, count);
-        const trackVolume = getTrackVolume(baseVolume, volumeDecay, index);
-        const shapedVolume = (trackVolume / 100) * Math.max(0.24, 1 - index * 0.08);
+        const layerBlend = layerCache.layerBlends[index];
+        const layerVariation = layerVariationCache[index];
+        const audienceTrack = layerCache.audienceTracks[index];
+        const shapedVolume = layerCache.shapedVolumes[index];
         const distanceBlend = clamp(layerBlend * (0.42 + preset.distanceEq) + audience.distanceOffset, 0, 1.25);
         const directMixLevel = audience.directMixTrim * Math.max(0.82, 1 - layerBlend * 0.12);
         const finalVolume = clamp(
@@ -195,10 +213,10 @@
           0,
           100
         );
-        const shownReverb = Math.round(clamp(getTrackEffectStrength(reverbIntensity, index) + audienceTrack.reverbExtra, 0, 100));
+        const shownReverb = Math.round(layerCache.reverbStrengths[index]);
         const shownDiffusion = Math.round(clamp(diffusionAmount, 0, 100));
         const shownAuxiliary = Math.round(clamp(auxiliaryAmount, 0, 100));
-        const shownSuppression = Math.round(clamp(getTrackEffectStrength(peakSuppression, index) + audienceTrack.suppressionExtra, 0, 100));
+        const shownSuppression = Math.round(layerCache.suppressionStrengths[index]);
         const depthPercent = Math.round(layerBlend * 100);
         const trackDelayMs = Math.round(index * effectiveDelayMs + layerVariation.timingJitterMs);
         const panValue = Math.round(

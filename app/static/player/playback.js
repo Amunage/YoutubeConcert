@@ -236,6 +236,68 @@
       });
     }
 
+    function transitionOutPlaybackGraph(nodes = [], fadeSeconds = 0.22) {
+      if (!audioContext || !Array.isArray(nodes) || nodes.length === 0) {
+        return;
+      }
+
+      const now = audioContext.currentTime;
+      const pendingSources = new Set();
+
+      nodes.forEach(({ source, trimNode }) => {
+        if (trimNode?.gain) {
+          trimNode.gain.cancelScheduledValues(now);
+          trimNode.gain.setValueAtTime(trimNode.gain.value, now);
+          trimNode.gain.linearRampToValueAtTime(0, now + fadeSeconds);
+        }
+
+        if (source) {
+          pendingSources.add(source);
+        }
+      });
+
+      const finalizeCleanup = () => {
+        nodes.forEach(({ source, cleanup }) => {
+          if (source && pendingSources.has(source)) {
+            try {
+              source.stop();
+            } catch (error) {
+            }
+            pendingSources.delete(source);
+          }
+
+          if (typeof cleanup === "function") {
+            cleanup();
+          }
+        });
+      };
+
+      if (typeof audioContext.createConstantSource === "function") {
+        const cleanupSource = audioContext.createConstantSource();
+        const cleanupGain = audioContext.createGain();
+        cleanupGain.gain.value = 0;
+        cleanupSource.offset.value = 0;
+        cleanupSource.connect(cleanupGain);
+        cleanupGain.connect(audioContext.destination);
+        cleanupSource.onended = () => {
+          finalizeCleanup();
+          try {
+            cleanupSource.disconnect();
+          } catch (error) {
+          }
+          try {
+            cleanupGain.disconnect();
+          } catch (error) {
+          }
+        };
+        cleanupSource.start(now);
+        cleanupSource.stop(now + Math.max(0.04, fadeSeconds + 0.06));
+        return;
+      }
+
+      window.setTimeout(finalizeCleanup, Math.max(40, Math.ceil((fadeSeconds + 0.06) * 1000)));
+    }
+
     function estimatePlaybackTailSeconds(settings = playbackSettings) {
       if (!settings || isOriginalMode) {
         return 0;
@@ -331,6 +393,9 @@
       stopProgressLoop();
       clearPlaybackCompletionMonitor();
       cleanupActivePlaybackGraph(true);
+      if (audioContext) {
+        syncSharedEffectBusUsage([], audioContext);
+      }
       playbackEndTime = 0;
       playbackTailSeconds = 0;
       isPlaying = false;
@@ -380,12 +445,26 @@
       };
     }
 
-    function playCurrentBuffer(offsetSeconds = 0) {
+    function playCurrentBuffer(offsetSeconds = 0, options = {}) {
       if (!audioContext || !currentBuffer || !playbackSettings) {
         return;
       }
 
-      stopPlayback();
+      const shouldCrossfade = Boolean(options.crossfadeFromCurrent) && isPlaying && activeNodes.length > 0;
+      const previousNodes = shouldCrossfade ? activeNodes : [];
+
+      playbackSessionToken += 1;
+      stopProgressLoop();
+      clearPlaybackCompletionMonitor(false);
+      if (shouldCrossfade) {
+        activeNodes = [];
+        transitionOutPlaybackGraph(previousNodes);
+      } else {
+        cleanupActivePlaybackGraph(true);
+        activeNodes = [];
+      }
+      playbackEndTime = 0;
+      playbackTailSeconds = 0;
       const sessionToken = playbackSessionToken;
       playbackOffset = Math.max(0, Math.min(offsetSeconds, Math.max(0, currentBuffer.duration - 0.05)));
       playbackStartedAt = audioContext.currentTime + 0.12;
@@ -394,6 +473,7 @@
       applyCurrentMasterBusProfile(playbackSettings);
 
       if (isOriginalMode) {
+        syncSharedEffectBusUsage([], audioContext);
         const source = audioContext.createBufferSource();
         source.buffer = currentBuffer;
 
@@ -406,6 +486,7 @@
         source.start(playbackStartedAt, playbackOffset);
         activeNodes.push({
           source,
+          trimNode: gainNode,
           cleanup: () => {
             try {
               source.disconnect();
@@ -442,14 +523,105 @@
       const audience = getAudiencePresetConfig(audiencePreset);
       const effectiveDelayMs = delayMs * audience.delayScale;
       const variationSeedBase = currentTrackId || currentTrackUrl || "default";
+      const preset = getRoomPresetConfig(roomPreset);
+      const layerCache = buildLayerComputationCache(
+        count,
+        baseVolume,
+        volumeDecay,
+        reverbIntensity,
+        peakSuppression,
+        audiencePreset
+      );
+      const layerVariationCache = buildLayerVariationCache(
+        variationSeedBase,
+        count,
+        roomPreset,
+        audiencePreset
+      );
+      const activeBusKinds = [];
+      if (reverbIntensity > 0) {
+        activeBusKinds.push("early", "late");
+      }
+      if (diffusionAmount > 0) {
+        activeBusKinds.push("diffusion");
+      }
+      if (auxiliaryAmount > 0) {
+        activeBusKinds.push("smear", "blur", "reflection");
+      }
+      syncSharedEffectBusUsage(activeBusKinds, audioContext);
+      const sharedBuses = {
+        early: reverbIntensity > 0 ? ensureSharedEffectBus("early", { roomPreset }, audioContext) : null,
+        late: reverbIntensity > 0 ? ensureSharedEffectBus("late", { roomPreset }, audioContext) : null,
+        diffusion: diffusionAmount > 0
+          ? ensureSharedEffectBus(
+              "diffusion",
+              {
+                roomPreset,
+                audiencePreset,
+                timesMs: audience.diffusionTimesMs,
+                feedback: audience.diffusionFeedback,
+                cutoffHz: audience.diffusionCutHz,
+                stereoSpread: audience.diffusionStereo,
+              },
+              audioContext
+            )
+          : null,
+        smear: auxiliaryAmount > 0
+          ? ensureSharedEffectBus(
+              "smear",
+              {
+                roomPreset,
+                audiencePreset,
+                tapTimesMs: audience.smearTapMs,
+                cutHz: audience.smearCutHz,
+                stereoWidth: audience.stereoWidth,
+              },
+              audioContext
+            )
+          : null,
+        blur: auxiliaryAmount > 0
+          ? ensureSharedEffectBus(
+              "blur",
+              {
+                roomPreset,
+                audiencePreset,
+                tapTimesMs: audience.transientBlurTapMs,
+                directCutHz: audience.directCutHz,
+              },
+              audioContext
+            )
+          : null,
+        reflection: auxiliaryAmount > 0
+          ? ensureSharedEffectBus(
+              "reflection",
+              {
+                roomPreset,
+                audiencePreset,
+                tapTimesMs: preset.earlyReflectionsMs,
+                spacing: audience.reflectionSpacing,
+                stereoWidth: preset.reflectionWidth * audience.stereoWidth,
+                reflectionBoost: audience.reflectionBoost,
+              },
+              audioContext
+            )
+          : null,
+      };
+      const playbackBuildContext = {
+        trackCount: count,
+        preset,
+        audience,
+        effectiveDelayMs,
+        variationSeedBase,
+        layerCache,
+        layerVariationCache,
+        sharedBuses,
+      };
       for (let index = 0; index < count; index += 1) {
-        const volume = getTrackVolume(baseVolume, volumeDecay, index);
-        const shapedVolume = (volume / 100) * Math.max(0.24, 1 - index * 0.08);
         scheduleLayeredTrack(
           currentBuffer,
           playbackStartedAt + (index * effectiveDelayMs) / 1000,
           playbackOffset,
-          shapedVolume,
+          layerCache.shapedVolumes[index],
           index,
           delayMs,
           reverbIntensity,
@@ -457,7 +629,7 @@
           roomPreset,
           audiencePreset,
           {
-            variationSeedBase,
+            playbackContext: playbackBuildContext,
             reverbAmount: reverbIntensity,
             diffusionAmount,
             auxiliaryAmount,
