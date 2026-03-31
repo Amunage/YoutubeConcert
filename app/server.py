@@ -1,23 +1,36 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import http.server
 import json
 import mimetypes
+import threading
 
-from app.core.runtime import ThreadingHTTPServer, open_browser_tab
-from app.core.shutdown import request_shutdown
-from app.media.cache import prune_cache
-from app.media.service import ACTIVE_TRACK_IDS, ADMIN_TOKEN, TRACKS, prepare_track, read_track_bytes
-from app.media.youtube import is_probably_youtube, resolve_input_url, resolve_playlist_entry
-from app.server.render import render_app_html
-from app.server.responses import send_json
-from app.shared.constants import HTML_CONTENT_TYPE
-from app.shared.utils import with_access_hint
+from .backend import (
+    ADMIN_TOKEN,
+    is_probably_youtube,
+    prepare_track,
+    prune_cache,
+    read_track_bytes,
+    resolve_input_url,
+    resolve_playlist_entry,
+)
+from .runtime import ThreadingHTTPServer, open_browser_tab
+from .ui import render_app_html
+
+
+
 
 
 class AppHandler(http.server.BaseHTTPRequestHandler):
     server_version = "YouTubeConcert/1.0"
+
+    @staticmethod
+    def with_access_hint(message: str) -> str:
+        lowered = message.lower()
+        if "music premium members" in lowered or "only available to music premium" in lowered:
+            return "이 영상은 프리미엄 전용입니다."
+        return message
 
     def is_local_host_request(self) -> bool:
         host = (self.headers.get("Host") or "").split(":", 1)[0].lower()
@@ -30,11 +43,19 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
         }
         return render_app_html(config)
 
+    def send_json(self, status: int, payload: dict[str, str]) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self) -> None:
         if self.path in {"/", "/index.html"}:
             body = self.render_html()
             self.send_response(200)
-            self.send_header("Content-Type", HTML_CONTENT_TYPE)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -62,10 +83,10 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
         if self.path == "/api/shutdown":
             admin_token = self.headers.get("X-Admin-Token", "")
             if admin_token != ADMIN_TOKEN:
-                send_json(self, 403, {"error": "Shutdown is not allowed."})
+                self.send_json(403, {"error": "종료 권한이 없습니다."})
                 return
-            send_json(self, 200, {"ok": "shutting down"})
-            request_shutdown(self.server)
+            self.send_json(200, {"ok": "shutting down"})
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
             return
 
         if self.path not in {"/api/prepare", "/api/resolve", "/api/playlist-entry"}:
@@ -78,27 +99,25 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
         try:
             data = json.loads(payload.decode("utf-8"))
         except json.JSONDecodeError:
-            send_json(self, 400, {"error": "Invalid JSON request."})
+            self.send_json(400, {"error": "잘못된 JSON 요청입니다."})
             return
 
         url = str(data.get("url", "")).strip()
         if not url:
-            send_json(self, 400, {"error": "YouTube URL is empty."})
+            self.send_json(400, {"error": "유튜브 주소가 비어 있습니다."})
             return
         if not is_probably_youtube(url):
-            send_json(self, 400, {"error": "Invalid YouTube URL format."})
+            self.send_json(400, {"error": "유튜브 주소 형태가 올바르지 않습니다."})
             return
 
         if self.path == "/api/resolve":
             try:
                 resolved = resolve_input_url(url)
             except RuntimeError as error:
-                send_json(self, 500, {"error": with_access_hint(f"Input analysis failed: {error}")})
+                self.send_json(500, {"error": self.with_access_hint(f"입력 분석 실패: {error}")})
                 return
 
-            send_json(
-                self,
-                200,
+            body = json.dumps(
                 {
                     "title": str(resolved["title"]),
                     "playlistCount": int(resolved["playlist_count"]),
@@ -107,7 +126,13 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
                     "firstEntryIndex": int(resolved["first_entry_index"]),
                     "isPlaylist": bool(resolved["is_playlist"]),
                 },
-            )
+                ensure_ascii=False,
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
 
         if self.path == "/api/playlist-entry":
@@ -115,31 +140,39 @@ class AppHandler(http.server.BaseHTTPRequestHandler):
             try:
                 item_index = int(raw_index)
             except (TypeError, ValueError):
-                send_json(self, 400, {"error": "Invalid playlist item number."})
+                self.send_json(400, {"error": "재생목록 곡 번호가 잘못되었습니다."})
                 return
             if item_index < 1:
-                send_json(self, 400, {"error": "Playlist item number must be 1 or greater."})
+                self.send_json(400, {"error": "재생목록 곡 번호는 1 이상이어야 합니다."})
                 return
 
             try:
                 entry = resolve_playlist_entry(url, item_index)
             except RuntimeError as error:
-                send_json(self, 500, {"error": with_access_hint(f"Playlist item lookup failed: {error}")})
+                self.send_json(500, {"error": self.with_access_hint(f"재생목록 곡 읽기 실패: {error}")})
                 return
 
-            send_json(self, 200, {"entry": entry})
+            body = json.dumps({"entry": entry}, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
 
         try:
             track = prepare_track(url)
         except RuntimeError as error:
-            send_json(self, 500, {"error": with_access_hint(f"Audio preparation failed: {error}")})
+            self.send_json(500, {"error": self.with_access_hint(f"오디오 준비 실패: {error}")})
             return
 
-        send_json(
-            self,
+        self.send_json(
             200,
-            {"id": track["id"], "title": track["title"], "filename": track["filename"]},
+            {
+                "id": track["id"],
+                "title": track["title"],
+                "filename": track["filename"],
+            },
         )
 
     def log_message(self, format: str, *args) -> None:
@@ -154,7 +187,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8000, help="Port to bind to.")
     args = parser.parse_args()
 
-    prune_cache(TRACKS, ACTIVE_TRACK_IDS)
+    prune_cache()
 
     app_url = f"http://{args.host}:{args.port}"
 
@@ -166,3 +199,7 @@ def main() -> None:
             server.serve_forever()
         except KeyboardInterrupt:
             print("\\nServer stopped.")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,7 +1,7 @@
 window.AudioPresets = (() => {
   const ROOM_PRESETS = {
     dry: {
-      label: "Dry",
+      label: "드라이",
       wetMix: 0.015,
       earlyWetMix: 0.82,
       lateWetMix: 0.22,
@@ -24,7 +24,7 @@ window.AudioPresets = (() => {
       directToneLift: 1.4,
     },
     stage: {
-      label: "Stage",
+      label: "스테이지",
       wetMix: 0.075,
       earlyWetMix: 0.68,
       lateWetMix: 0.42,
@@ -47,7 +47,7 @@ window.AudioPresets = (() => {
       directToneLift: 0.6,
     },
     hall: {
-      label: "Concert Hall",
+      label: "콘서트홀",
       wetMix: 0.24,
       earlyWetMix: 0.54,
       lateWetMix: 0.78,
@@ -70,7 +70,7 @@ window.AudioPresets = (() => {
       directToneLift: -0.6,
     },
     cathedral: {
-      label: "Cathedral",
+      label: "성당",
       wetMix: 0.38,
       earlyWetMix: 0.42,
       lateWetMix: 0.98,
@@ -97,7 +97,7 @@ window.AudioPresets = (() => {
   const AUDIENCE_PRESETS = {
     front: {
       preset: "front",
-      label: "Front Row",
+      label: "무대 앞",
       distanceOffset: -0.14,
       dryGain: 1.05,
       directMixTrim: 1,
@@ -129,7 +129,7 @@ window.AudioPresets = (() => {
     },
     outside: {
       preset: "outside",
-      label: "Outside Venue",
+      label: "공연장 밖",
       distanceOffset: 0.34,
       dryGain: 0.86,
       directMixTrim: 0.86,
@@ -161,7 +161,7 @@ window.AudioPresets = (() => {
     },
     rear: {
       preset: "rear",
-      label: "Rear Seats",
+      label: "객석 뒤",
       distanceOffset: 0.2,
       dryGain: 1.12,
       directMixTrim: 0.94,
@@ -193,7 +193,7 @@ window.AudioPresets = (() => {
     },
     mid: {
       preset: "mid",
-      label: "Middle Seats",
+      label: "객석 중간",
       distanceOffset: 0.04,
       dryGain: 1.06,
       directMixTrim: 0.97,

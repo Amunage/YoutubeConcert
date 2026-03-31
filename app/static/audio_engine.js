@@ -1,20 +1,290 @@
-﻿window.AudioLayers = (() => {
-  const {
-    getAudienceTrackProfile,
-    getRoomPresetConfig,
-    getAudiencePresetConfig,
-  } = window.AudioPresets;
-  const {
-    clamp,
-    createDisconnectCleanup,
-    hashStringSeed,
-    createSeededRandom,
-    getComplexityProfile,
-    getAuxiliaryTapCount,
-    limitTapPattern,
-  } = window.AudioEffects;
-  const { ensureSharedEffectBus } = window.AudioBuses;
-  const { connectToOutput } = window.AudioOutput;
+window.AudioEngine = (() => {
+    const reverbBufferCache = new Map();
+    const outputChainState = new WeakMap();
+    const {
+      getAudienceTrackProfile,
+      getRoomPresetConfig,
+      getAudiencePresetConfig,
+    } = window.AudioPresets;
+
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, value));
+    }
+
+    function createDisconnectCleanup(nodes = []) {
+      let cleanedUp = false;
+      return () => {
+        if (cleanedUp) {
+          return;
+        }
+        cleanedUp = true;
+        nodes.forEach((node) => {
+          if (!node || typeof node.disconnect !== "function") {
+            return;
+          }
+          try {
+            node.disconnect();
+          } catch (error) {
+          }
+        });
+      };
+    }
+
+    function hashStringSeed(value) {
+      let hash = 2166136261;
+      const text = String(value || "");
+      for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+      return hash >>> 0;
+    }
+
+    function createSeededRandom(seedValue) {
+      let seed = seedValue >>> 0;
+      return () => {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        return seed / 4294967296;
+      };
+    }
+
+    function ensureOutputChainState(context) {
+      if (!context) {
+        return null;
+      }
+
+      if (!outputChainState.has(context)) {
+        const mixInput = context.createGain();
+        mixInput.gain.value = 1;
+
+        const busCompressor = context.createDynamicsCompressor();
+        busCompressor.threshold.value = -16;
+        busCompressor.knee.value = 20;
+        busCompressor.ratio.value = 2.4;
+        busCompressor.attack.value = 0.003;
+        busCompressor.release.value = 0.17;
+
+        const busLimiter = context.createDynamicsCompressor();
+        busLimiter.threshold.value = -4;
+        busLimiter.knee.value = 0;
+        busLimiter.ratio.value = 20;
+        busLimiter.attack.value = 0.001;
+        busLimiter.release.value = 0.08;
+
+        const outputGain = context.createGain();
+        outputGain.gain.value = 0.7;
+
+        mixInput.connect(busCompressor);
+        busCompressor.connect(busLimiter);
+        busLimiter.connect(outputGain);
+        outputGain.connect(context.destination);
+
+        outputChainState.set(context, {
+          effectBuses: new Map(),
+          mixInput,
+          outputGain,
+          busCompressor,
+          busLimiter,
+        });
+      }
+
+      return outputChainState.get(context);
+    }
+
+    function ensureOutputChain(context) {
+      const state = ensureOutputChainState(context);
+      return state ? state.mixInput : null;
+    }
+
+    function setOutputVolume(level, context = audioContext) {
+      const state = ensureOutputChainState(context);
+      if (!state) {
+        return;
+      }
+
+      const safeLevel = clamp(level, 0, 1);
+      state.outputGain.gain.cancelScheduledValues(context.currentTime);
+      state.outputGain.gain.setTargetAtTime(safeLevel, context.currentTime, 0.02);
+    }
+
+    function setMasterBusProfile(options = {}, context = audioContext) {
+      const state = ensureOutputChainState(context);
+      if (!state) {
+        return;
+      }
+
+      const suppression = clamp(options.peakSuppression ?? 0, 0, 100) / 100;
+      const trackDensity = clamp(((options.trackCount ?? 1) - 1) / 11, 0, 1);
+      const isOriginal = Boolean(options.isOriginalMode);
+      const now = context.currentTime;
+
+      const mixTrim = isOriginal
+        ? 1
+        : clamp(1 - suppression * 0.12 - trackDensity * 0.14, 0.72, 1);
+      const compressorThreshold = isOriginal
+        ? -9
+        : -16 - suppression * 8 - trackDensity * 5;
+      const compressorKnee = isOriginal
+        ? 12
+        : 18 + suppression * 10;
+      const compressorRatio = isOriginal
+        ? 1.35
+        : 2.4 + suppression * 4.2 + trackDensity * 1.3;
+      const compressorAttack = isOriginal
+        ? 0.008
+        : Math.max(0.0015, 0.004 - suppression * 0.0018 - trackDensity * 0.0007);
+      const compressorRelease = isOriginal
+        ? 0.11
+        : Math.min(0.28, 0.12 + suppression * 0.08 + trackDensity * 0.05);
+
+      const limiterThreshold = isOriginal
+        ? -1.4
+        : -4.2 - suppression * 1.6 - trackDensity * 0.7;
+      const limiterRatio = isOriginal
+        ? 8
+        : 18 + suppression * 10;
+      const limiterAttack = isOriginal
+        ? 0.003
+        : Math.max(0.0008, 0.0016 - suppression * 0.0005);
+      const limiterRelease = isOriginal
+        ? 0.06
+        : Math.min(0.16, 0.06 + suppression * 0.05 + trackDensity * 0.02);
+
+      state.mixInput.gain.cancelScheduledValues(now);
+      state.mixInput.gain.setTargetAtTime(mixTrim, now, 0.03);
+
+      state.busCompressor.threshold.cancelScheduledValues(now);
+      state.busCompressor.threshold.setTargetAtTime(compressorThreshold, now, 0.03);
+      state.busCompressor.knee.cancelScheduledValues(now);
+      state.busCompressor.knee.setTargetAtTime(compressorKnee, now, 0.03);
+      state.busCompressor.ratio.cancelScheduledValues(now);
+      state.busCompressor.ratio.setTargetAtTime(compressorRatio, now, 0.03);
+      state.busCompressor.attack.cancelScheduledValues(now);
+      state.busCompressor.attack.setTargetAtTime(compressorAttack, now, 0.03);
+      state.busCompressor.release.cancelScheduledValues(now);
+      state.busCompressor.release.setTargetAtTime(compressorRelease, now, 0.03);
+
+      state.busLimiter.threshold.cancelScheduledValues(now);
+      state.busLimiter.threshold.setTargetAtTime(limiterThreshold, now, 0.03);
+      state.busLimiter.ratio.cancelScheduledValues(now);
+      state.busLimiter.ratio.setTargetAtTime(limiterRatio, now, 0.03);
+      state.busLimiter.attack.cancelScheduledValues(now);
+      state.busLimiter.attack.setTargetAtTime(limiterAttack, now, 0.03);
+      state.busLimiter.release.cancelScheduledValues(now);
+      state.busLimiter.release.setTargetAtTime(limiterRelease, now, 0.03);
+    }
+
+    function connectToOutput(node, context = audioContext) {
+      const output = ensureOutputChain(context);
+      if (!output) {
+        return;
+      }
+      node.connect(output);
+    }
+
+    function ensureSharedEffectBus(kind, options = {}, context = audioContext) {
+      const state = ensureOutputChainState(context);
+      if (!state) {
+        return null;
+      }
+
+      const roomPreset = options.roomPreset || "hall";
+      const audiencePreset = options.audiencePreset || "mid";
+      const busKey = kind === "diffusion"
+        ? `${kind}:${roomPreset}:${audiencePreset}`
+        : `${kind}:${roomPreset}`;
+      if (state.effectBuses.has(busKey)) {
+        return state.effectBuses.get(busKey);
+      }
+
+      const input = context.createGain();
+      input.gain.value = 1;
+
+      const returnGain = context.createGain();
+      const limiter = context.createDynamicsCompressor();
+      let bus;
+
+      if (kind === "diffusion") {
+        returnGain.gain.value = 1;
+        limiter.threshold.value = -22;
+        limiter.knee.value = 18;
+        limiter.ratio.value = 12;
+        limiter.attack.value = 0.003;
+        limiter.release.value = 0.14;
+
+        buildDiffusionNetwork(input, returnGain, {
+          timesMs: options.timesMs,
+          feedback: options.feedback,
+          cutoffHz: options.cutoffHz,
+          stereoSpread: options.stereoSpread,
+        });
+
+        bus = { input, returnGain, limiter };
+      } else {
+        const convolver = context.createConvolver();
+        convolver.buffer = getConvolverBuffer(roomPreset, kind);
+
+        returnGain.gain.value = kind === "early" ? 1.06 : 1;
+        limiter.threshold.value = kind === "early" ? -18 : -20;
+        limiter.knee.value = kind === "early" ? 16 : 20;
+        limiter.ratio.value = kind === "early" ? 6 : 10;
+        limiter.attack.value = kind === "early" ? 0.002 : 0.004;
+        limiter.release.value = kind === "early" ? 0.11 : 0.18;
+
+        input.connect(convolver);
+        convolver.connect(returnGain);
+        bus = { input, convolver, returnGain, limiter };
+      }
+
+      returnGain.connect(limiter);
+      connectToOutput(limiter, context);
+
+      state.effectBuses.set(busKey, bus);
+      return bus;
+    }
+
+    function buildDiffusionNetwork(inputNode, targetNode, options = {}) {
+      const diffusionTimesMs = options.timesMs || [11, 17, 29, 41];
+      const feedbackAmount = clamp(options.feedback ?? 0.42, 0, 0.72);
+      const cutoffHz = options.cutoffHz || 4200;
+      const spread = options.stereoSpread || 0.12;
+      let previousNode = inputNode;
+
+      diffusionTimesMs.forEach((timeMs, index) => {
+        const stageDelay = audioContext.createDelay(0.12);
+        stageDelay.delayTime.value = Math.max(0.003, timeMs / 1000);
+
+        const stageAllpass = audioContext.createBiquadFilter();
+        stageAllpass.type = "allpass";
+        stageAllpass.frequency.value = 900 + index * 650;
+        stageAllpass.Q.value = 0.7 + index * 0.08;
+
+        const stageTone = audioContext.createBiquadFilter();
+        stageTone.type = "lowpass";
+        stageTone.frequency.value = Math.max(900, cutoffHz - index * 380);
+        stageTone.Q.value = 0.5;
+
+        const stagePanner = audioContext.createStereoPanner();
+        stagePanner.pan.value = clamp((index % 2 === 0 ? -1 : 1) * spread * (0.55 + index * 0.14), -0.82, 0.82);
+
+        const stageMixGain = audioContext.createGain();
+        stageMixGain.gain.value = Math.max(0.18, 0.44 - index * 0.04);
+
+        const feedbackGain = audioContext.createGain();
+        feedbackGain.gain.value = clamp(feedbackAmount * (0.78 - index * 0.09), 0, 0.68);
+
+        previousNode.connect(stageDelay);
+        stageDelay.connect(stageAllpass);
+        stageAllpass.connect(stageTone);
+        stageTone.connect(stageMixGain);
+        stageMixGain.connect(stagePanner);
+        stagePanner.connect(targetNode);
+        stageMixGain.connect(feedbackGain);
+        feedbackGain.connect(stageDelay);
+
+        previousNode = stageMixGain;
+      });
+    }
 
     function getLayerBlend(layerIndex, trackCount) {
       if (trackCount <= 1) {
@@ -80,6 +350,187 @@
         articulationOffsetHz: bipolar() * (120 + depth * 520),
         fadeScale: clamp(0.92 + seededRandom() * 0.22, 0.9, 1.16),
       };
+    }
+
+    function getComplexityProfile(trackCount, roomPreset, audiencePreset, reverbDrive) {
+      const roomLoad = roomPreset === "cathedral" ? 0.8 : roomPreset === "hall" ? 0.42 : roomPreset === "stage" ? 0.16 : 0;
+      const audienceLoad = audiencePreset === "outside" ? 0.8 : audiencePreset === "rear" ? 0.36 : audiencePreset === "mid" ? 0.18 : 0;
+      const cloneLoad = Math.max(0, trackCount - 1) / 5.5;
+      const wetLoad = clamp(reverbDrive, 0, 100) / 100;
+      const totalLoad = roomLoad + audienceLoad + cloneLoad + wetLoad * 0.7;
+
+      return {
+        totalLoad,
+        tapDensityScale: totalLoad >= 2.8 ? 0.35 : totalLoad >= 2.1 ? 0.5 : totalLoad >= 1.5 ? 0.7 : totalLoad >= 1 ? 0.88 : 1,
+        allowDiffusion: totalLoad < 2.7,
+        lateWetScale: totalLoad >= 2.6 ? 0.82 : totalLoad >= 1.9 ? 0.9 : 1,
+      };
+    }
+
+    function getAuxiliaryTapCount(totalCount, trackCount, layerBlend, minimum = 2, densityScale = 1) {
+      if (!totalCount) {
+        return 0;
+      }
+
+      const density = trackCount >= 10 ? 0.45 : trackCount >= 7 ? 0.62 : trackCount >= 5 ? 0.8 : 1;
+      const requestedCount = Math.round(totalCount * density * densityScale * (1 - layerBlend * 0.28));
+      return clamp(requestedCount, Math.min(totalCount, minimum), totalCount);
+    }
+
+    function limitTapPattern(pattern, count) {
+      if (!Array.isArray(pattern) || pattern.length === 0 || count <= 0) {
+        return [];
+      }
+      if (pattern.length <= count) {
+        return pattern;
+      }
+
+      const limitedPattern = [];
+      for (let index = 0; index < count; index += 1) {
+        const patternIndex = Math.round((index * (pattern.length - 1)) / Math.max(1, count - 1));
+        const value = pattern[patternIndex];
+        if (limitedPattern[limitedPattern.length - 1] !== value) {
+          limitedPattern.push(value);
+        }
+      }
+      return limitedPattern;
+    }
+
+    function getConvolverBuffer(presetName, stage = "late") {
+      const preset = getRoomPresetConfig(presetName);
+      const cacheKey = `${presetName}:${stage}:${audioContext.sampleRate}`;
+      if (reverbBufferCache.has(cacheKey)) {
+        return reverbBufferCache.get(cacheKey);
+      }
+
+      const sampleRate = audioContext.sampleRate;
+      const reverbSeconds = stage === "early" ? preset.earlyReverbSeconds : preset.lateReverbSeconds;
+      const decayPower = stage === "early" ? preset.earlyDecayPower : preset.lateDecayPower;
+      const length = Math.max(1, Math.floor(sampleRate * reverbSeconds));
+      const impulse = audioContext.createBuffer(2, length, sampleRate);
+      const seededRandom = createSeededRandom(hashStringSeed(cacheKey));
+
+      for (let channel = 0; channel < 2; channel += 1) {
+        const channelData = impulse.getChannelData(channel);
+
+        if (stage === "early") {
+          const tapPattern = Array.isArray(preset.earlyReflectionsMs) && preset.earlyReflectionsMs.length
+            ? preset.earlyReflectionsMs
+            : [8, 15, 24];
+          const stereoOffsetScale = Math.max(0.2, preset.reflectionWidth * 2.1);
+
+          for (let tapIndex = 0; tapIndex < tapPattern.length; tapIndex += 1) {
+            const baseMs = tapPattern[tapIndex];
+            const stereoOffsetMs = (channel === 0 ? -1 : 1) * stereoOffsetScale * (0.6 + tapIndex * 0.22);
+            const tapSample = Math.max(0, Math.min(length - 1, Math.floor(((baseMs + stereoOffsetMs) / 1000) * sampleRate)));
+            const tapGain = Math.max(0.08, 0.68 - tapIndex * 0.09) * (0.9 + seededRandom() * 0.18);
+            channelData[tapSample] += tapGain;
+
+            const smearLength = Math.max(10, Math.floor(sampleRate * (0.0028 + tapIndex * 0.0008)));
+            for (let smearIndex = 1; smearIndex < smearLength && tapSample + smearIndex < length; smearIndex += 1) {
+              const smearDecay = Math.pow(1 - smearIndex / smearLength, 1.8 + tapIndex * 0.16);
+              const smearGrain = (seededRandom() * 2 - 1) * 0.34;
+              channelData[tapSample + smearIndex] += smearGrain * tapGain * smearDecay;
+            }
+          }
+
+          for (let index = 0; index < length; index += 1) {
+            const washDecay = Math.pow(1 - index / length, Math.max(1.5, decayPower - 0.5));
+            const wash = (seededRandom() * 2 - 1) * 0.045 * washDecay;
+            channelData[index] += wash;
+          }
+        } else {
+          const fadeInSamples = Math.max(1, Math.floor(sampleRate * Math.min(0.05, reverbSeconds * 0.08)));
+          for (let index = 0; index < length; index += 1) {
+            const decay = Math.pow(1 - index / length, decayPower);
+            const shimmer = channel === 0 ? 1 - index / length : Math.pow(1 - index / length, 0.92);
+            const onset = index < fadeInSamples ? index / fadeInSamples : 1;
+            const grain = (seededRandom() * 2 - 1) * 0.82 + (seededRandom() * 2 - 1) * 0.18;
+            channelData[index] = grain * decay * shimmer * onset;
+          }
+        }
+      }
+
+      reverbBufferCache.set(cacheKey, impulse);
+      return impulse;
+    }
+
+    function shuffleIndices(count) {
+      const items = Array.from({ length: count }, (_, index) => index);
+      for (let index = items.length - 1; index > 0; index -= 1) {
+        const swapIndex = Math.floor(Math.random() * (index + 1));
+        [items[index], items[swapIndex]] = [items[swapIndex], items[index]];
+      }
+      return items;
+    }
+
+    function rebuildPlayOrder(startEntryIndex = 0) {
+      if (!playlistCount) {
+        playOrder = [];
+        currentOrderPosition = 0;
+        prefetchedTrackUrl = "";
+        prefetchInFlightUrl = "";
+        return;
+      }
+
+      playOrder = shufflePlaybackInput.checked
+        ? shuffleIndices(playlistCount)
+        : Array.from({ length: playlistCount }, (_, index) => index);
+
+      const pinnedIndex = Math.max(0, Math.min(startEntryIndex, playlistCount - 1));
+      const foundAt = playOrder.indexOf(pinnedIndex);
+      if (foundAt > 0) {
+        playOrder.splice(foundAt, 1);
+        playOrder.unshift(pinnedIndex);
+      }
+      currentOrderPosition = 0;
+      prefetchedTrackUrl = "";
+      prefetchInFlightUrl = "";
+    }
+
+    function getCurrentPlaylistIndex() {
+      if (!playlistCount || !playOrder.length) {
+        return null;
+      }
+      return playOrder[currentOrderPosition] ?? null;
+    }
+
+    function getCurrentPlaylistEntry() {
+      const entryIndex = getCurrentPlaylistIndex();
+      if (entryIndex === null) {
+        return null;
+      }
+      return playlistEntryCache[entryIndex] || null;
+    }
+
+    function getAdjacentOrderPosition(direction) {
+      if (!playlistCount || !playOrder.length) {
+        return null;
+      }
+
+      let nextOrderPosition = currentOrderPosition + direction;
+      if (nextOrderPosition < 0) {
+        return playlistLoopInput.checked ? playOrder.length - 1 : 0;
+      }
+      if (nextOrderPosition >= playOrder.length) {
+        return playlistLoopInput.checked ? 0 : null;
+      }
+      return nextOrderPosition;
+    }
+
+    function updateMetaText(entryTitle = "", entryIndex = null) {
+      const normalizedEntryTitle = (entryTitle || "").trim();
+      const hasIndex = entryIndex !== null && playlistCount > 1;
+      const indexText = hasIndex ? `<${entryIndex + 1}/${playlistCount}> ` : "";
+      let text = "";
+
+      if (normalizedEntryTitle) {
+        text = `${indexText}${normalizedEntryTitle}`;
+      } else if (hasIndex) {
+        text = indexText.trim();
+      }
+
+      metaText.textContent = text || "아직 불러온 곡이 없습니다.";
     }
 
     function scheduleLayeredTrack(buffer, startTime, offsetSeconds, volume, layerIndex, delayMs, reverbIntensity, peakSuppression, roomPreset, audiencePreset, effectOptions = {}) {
@@ -459,13 +910,26 @@
       }
     }
 
-  return {
-    getLayerBlend,
-    getTrackVolume,
-    getTrackEffectStrength,
-    getPanPosition,
-    getReflectionPan,
-    getLayerVariation,
-    scheduleLayeredTrack,
-  };
-})();
+
+    return {
+      getLayerBlend,
+      getTrackVolume,
+      getTrackEffectStrength,
+      getAudienceTrackProfile,
+      getRoomPresetConfig,
+      getPanPosition,
+      getLayerVariation,
+      getAudiencePresetConfig,
+      getReflectionPan,
+      getConvolverBuffer,
+      ensureOutputChain,
+      setOutputVolume,
+      setMasterBusProfile,
+      rebuildPlayOrder,
+      getCurrentPlaylistIndex,
+      getCurrentPlaylistEntry,
+      getAdjacentOrderPosition,
+      updateMetaText,
+      scheduleLayeredTrack,
+    };
+  })();

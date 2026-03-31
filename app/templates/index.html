@@ -1,5 +1,5 @@
-﻿<!DOCTYPE html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="ko">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -81,7 +81,7 @@
     }
 
     .playlist-row::before {
-      content: "Playlist";
+      content: "재생목록";
       position: absolute;
       left: 16px;
       top: 50%;
@@ -538,7 +538,7 @@
       <div class="stack">
         <div class="url-row">
           <input id="youtubeUrlVisible" type="text" placeholder="https://www.youtube.com/watch?v=...">
-          <button id="loadButtonVisible" class="primary-button" type="button">Load</button>
+          <button id="loadButtonVisible" class="primary-button" type="button">불러오기</button>
         </div>
 
         <div id="thumbnailPanel" class="thumbnail-panel" aria-hidden="true">
@@ -546,18 +546,18 @@
         </div>
 
         <div class="meta-panel">
-          <p class="meta-title" id="metaText">No track loaded yet.</p>
+          <p class="meta-title" id="metaText">아직 불러온 곡이 없습니다.</p>
           <div class="status-box">
             <input id="playbackSlider" class="playback-slider" type="range" min="0" max="1000" value="0" disabled>
           </div>
 
           <div class="controls-row">
-            <button id="prevButton" class="icon-button" type="button" title="Previous track">⏮</button>
-            <button id="playPauseButton" class="icon-button play-button" type="button" title="Play">▶</button>
-            <button id="nextButton" class="icon-button" type="button" title="Next track">⏭</button>
+            <button id="prevButton" class="icon-button" type="button" title="이전 곡">⏮</button>
+            <button id="playPauseButton" class="icon-button play-button" type="button" title="재생">▶</button>
+            <button id="nextButton" class="icon-button" type="button" title="다음 곡">⏭</button>
 
             <div class="volume-group">
-              <button id="muteButton" class="icon-button mute-button" type="button" title="Mute">🔊</button>
+              <button id="muteButton" class="icon-button mute-button" type="button" title="음소거">🔊</button>
               <input id="playerVolume" class="volume-slider" type="range" min="0" max="100" value="70">
               <span id="playbackTimes" class="time-readout">0:00/0:00</span>
             </div>
@@ -566,7 +566,7 @@
             <div class="spacer"></div>
 
             <div class="toggle-row">
-              <label id="loopChip" class="chip" for="loopPlayback" title="Repeat current track" aria-label="Repeat current track">
+              <label id="loopChip" class="chip" for="loopPlayback" title="현재 곡 반복" aria-label="현재 곡 반복">
                 <input id="loopPlayback" type="checkbox">
                 <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                   <path d="M17 2l4 4-4 4"></path>
@@ -574,10 +574,10 @@
                   <path d="M7 22l-4-4 4-4"></path>
                   <path d="M21 13v2a3 3 0 0 1-3 3H3"></path>
                 </svg>
-                <span class="visually-hidden">Repeat</span>
+                <span class="visually-hidden">반복</span>
               </label>
               <input id="playlistLoop" type="checkbox" checked class="visually-hidden">
-              <label id="shuffleChip" class="chip" for="shufflePlayback" title="Shuffle" aria-label="Shuffle">
+              <label id="shuffleChip" class="chip" for="shufflePlayback" title="셔플" aria-label="셔플">
                 <input id="shufflePlayback" type="checkbox">
                 <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                   <path d="M16 3h5v5"></path>
@@ -587,9 +587,9 @@
                   <path d="M4 20l5-5"></path>
                   <path d="M16 21h5v-5"></path>
                 </svg>
-                <span class="visually-hidden">Shuffle</span>
+                <span class="visually-hidden">셔플</span>
               </label>
-              <button id="originalToggleButton" class="icon-button" type="button" title="Original mode" aria-label="Original mode">
+              <button id="originalToggleButton" class="icon-button" type="button" title="원본 모드" aria-label="원본 모드">
                 <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                   <path d="M12 3v7"></path>
                   <path d="M7.05 5.05a9 9 0 1 0 9.9 0"></path>
@@ -600,7 +600,7 @@
         </div>
         <div class="playlist-row">
           <select id="playlistSelectRow" disabled>
-            <option value="">Playlist</option>
+            <option value="">재생목록</option>
           </select>
         </div>
       </div>
@@ -608,55 +608,59 @@
 
     <section class="panel">
       <div class="settings-panel-head">
-        <h2 class="settings-panel-title">Playback Settings</h2>
-        <button id="applySettingsButton" class="subtle-button" type="button">Apply</button>
+        <h2 class="settings-panel-title">재생 설정</h2>
+        <button id="applySettingsButton" class="subtle-button" type="button">적용</button>
       </div>
 
       <div class="settings-grid">
         <div class="field">
-          <label for="roomPreset">Room Preset</label>
+          <label for="roomPreset">공간 프리셋</label>
           <select id="roomPreset">
-            <option value="dry">Dry</option>
-            <option value="stage">Stage</option>
-            <option value="hall" selected>Concert Hall</option>
-            <option value="cathedral">Cathedral</option>
+            <option value="dry">드라이</option>
+            <option value="stage">스테이지</option>
+            <option value="hall" selected>콘서트홀</option>
+            <option value="cathedral">성당</option>
           </select>
         </div>
         <div class="field">
-          <label for="audiencePreset">Audience Position</label>
+          <label for="audiencePreset">관객석 위치</label>
           <select id="audiencePreset">
-            <option value="front">Front Row</option>
-            <option value="mid" selected>Middle Seats</option>
-            <option value="rear">Rear Seats</option>
-            <option value="outside">Outside Venue</option>
+            <option value="front">무대 앞</option>
+            <option value="mid" selected>객석 중간</option>
+            <option value="rear">객석 뒤</option>
+            <option value="outside">공연장 밖</option>
           </select>
         </div>
         <div class="field">
-          <label for="cloneCount">Layer Count</label>
+          <label for="cloneCount">트랙 개수</label>
           <input id="cloneCount" type="number" min="1" max="8" step="1" value="3">
         </div>
         <div class="field">
-          <label for="delayMs">Delay (ms)</label>
+          <label for="ensembleVolume">합주 볼륨(%)</label>
+          <input id="ensembleVolume" type="number" min="0" max="100" step="1" value="70">
+        </div>
+        <div class="field">
+          <label for="delayMs">딜레이(ms)</label>
           <input id="delayMs" type="number" min="0" step="1" value="160">
         </div>
         <div class="field">
-          <label for="volumeDecay">Volume Decay (%)</label>
+          <label for="volumeDecay">볼륨 감소율(%)</label>
           <input id="volumeDecay" type="number" min="0" step="1" value="50">
         </div>
         <div class="field">
-          <label for="reverbIntensity">Reverb Intensity (%)</label>
+          <label for="reverbIntensity">울림 강도(%)</label>
           <input id="reverbIntensity" type="number" min="0" max="100" step="1" value="40">
         </div>
         <div class="field">
-          <label for="diffusionAmount">Diffusion Amount (%)</label>
+          <label for="diffusionAmount">확산 강도(%)</label>
           <input id="diffusionAmount" type="number" min="0" max="100" step="1" value="90">
         </div>
         <div class="field">
-          <label for="auxiliaryAmount">Auxiliary Reflections (%)</label>
+          <label for="auxiliaryAmount">보조 반사층(%)</label>
           <input id="auxiliaryAmount" type="number" min="0" max="100" step="1" value="90">
         </div>
         <div class="field">
-          <label for="peakSuppression">Peak Suppression (%)</label>
+          <label for="peakSuppression">피크 억제 강도(%)</label>
           <input id="peakSuppression" type="number" min="0" max="100" step="1" value="70">
         </div>
       </div>
@@ -667,40 +671,17 @@
     </section>
 
     <div class="footer-row">
-      <button id="shutdownButton" class="subtle-button" type="button">Shutdown</button>
+      <button id="shutdownButton" class="subtle-button" type="button">종료</button>
     </div>
   </main>
   <script>
-__APP_STATE_JS__
-  </script>
-  <script>
 __AUDIO_PRESETS_JS__
-  </script>
-  <script>
-__AUDIO_EFFECTS_JS__
-  </script>
-  <script>
-__AUDIO_OUTPUT_JS__
-  </script>
-  <script>
-__AUDIO_BUSES_JS__
-  </script>
-  <script>
-__AUDIO_LAYERS_JS__
   </script>
   <script>
 __AUDIO_ENGINE_JS__
   </script>
   <script>
-__UI_PLAYLIST_JS__
-  </script>
-  <script>
-__UI_SESSION_JS__
-  </script>
-  <script>
-__UI_CONTROLS_JS__
+__CLIENT_AUDIO_JS__
   </script>
 </body>
 </html>
-
-

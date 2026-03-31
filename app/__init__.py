@@ -1,1 +1,0 @@
-"""YTConcert application package."""
