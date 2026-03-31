@@ -516,6 +516,11 @@ window.AudioLayers = (() => {
       : [];
     if (reflectionPattern.length && sharedBuses?.reflection) {
       const reflectionDensity = reflectionPattern.length / Math.max(1, (preset.earlyReflections || []).length);
+      const reflectionDepthTrim = clamp(
+        1 - (audience.reflectionDepthTrimStrength || 0) * Math.pow(layerBlend, 1.15),
+        0.42,
+        1
+      );
       const reflectionSend = audioContext.createGain();
       reflectionSend.gain.value =
         adjustedVolume *
@@ -524,7 +529,8 @@ window.AudioLayers = (() => {
         Math.max(0.18, 1 - distanceBlend * 0.28) *
         (0.7 + layerBlend * 0.45) *
         audience.reflectionBoost *
-        dynamicWetTrim;
+        dynamicWetTrim *
+        reflectionDepthTrim;
 
       const reflectionPreDelay = audioContext.createDelay(0.2);
       reflectionPreDelay.delayTime.value = Math.max(0, (layerBlend * 12 + layerIndex * 2.5 + effectiveDelayMs * 0.02) / 1000);
