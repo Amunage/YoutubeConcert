@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YT Concert Live</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="popup-shell">
+    <section class="hero">
+      <p class="eyebrow">Sound Live FX</p>
+      <h1>YT Concert Live</h1>
+    </section>
+
+    <section class="card status-card">
+      <div>
+        <p class="label">Status</p>
+        <p id="statusText" class="status-text">Idle</p>
+        <p id="tabMeta" class="tab-meta"></p>
+      </div>
+      <button id="toggleButton" class="primary-button" type="button">Start Current Tab</button>
+    </section>
+
+    <section class="card">
+      <div class="field">
+        <label for="roomPreset">Space Preset</label>
+        <select id="roomPreset">
+          <option value="dry">Dry</option>
+          <option value="stage">Stage</option>
+          <option value="hall">Concert Hall</option>
+          <option value="cathedral">Cathedral</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="audiencePreset">Listener Position</label>
+        <select id="audiencePreset">
+          <option value="front">Front Row</option>
+          <option value="mid">Middle</option>
+          <option value="rear">Rear</option>
+          <option value="outside">Outside</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="cloneCount">Layer Count <span id="cloneCountValue"></span></label>
+        <input id="cloneCount" type="range" min="1" max="8" step="1">
+      </div>
+
+      <div class="field">
+        <label for="delayMs">Delay <span id="delayMsValue"></span></label>
+        <input id="delayMs" type="range" min="0" max="320" step="5">
+      </div>
+    </section>
+
+    <details class="card advanced-card" id="advancedOptions">
+      <summary class="advanced-summary">
+        <span>Advanced</span>
+        <span class="advanced-summary-hint">Fine-tune</span>
+      </summary>
+
+      <div class="advanced-fields">
+        <div class="field">
+          <label for="ensembleVolume">Layer Volume <span id="ensembleVolumeValue"></span></label>
+          <input id="ensembleVolume" type="range" min="0" max="100" step="1">
+        </div>
+
+        <div class="field">
+          <label for="volumeDecay">Layer Decay <span id="volumeDecayValue"></span></label>
+          <input id="volumeDecay" type="range" min="0" max="100" step="1">
+        </div>
+
+        <div class="field">
+          <label for="reverbIntensity">Reverb Intensity <span id="reverbIntensityValue"></span></label>
+          <input id="reverbIntensity" type="range" min="0" max="100" step="1">
+        </div>
+
+        <div class="field">
+          <label for="diffusionAmount">Diffusion <span id="diffusionAmountValue"></span></label>
+          <input id="diffusionAmount" type="range" min="0" max="100" step="1">
+        </div>
+
+        <div class="field">
+          <label for="auxiliaryAmount">Auxiliary Reflections <span id="auxiliaryAmountValue"></span></label>
+          <input id="auxiliaryAmount" type="range" min="0" max="100" step="1">
+        </div>
+
+        <div class="field">
+          <label for="peakSuppression">Peak Suppression <span id="peakSuppressionValue"></span></label>
+          <input id="peakSuppression" type="range" min="0" max="100" step="1">
+        </div>
+
+        <div class="field">
+          <label for="directMixTrim">Direct Mix <span id="directMixTrimValue"></span></label>
+          <input id="directMixTrim" type="range" min="0" max="200" step="5">
+        </div>
+
+        <div class="field">
+          <label for="preDelayScale">Pre-delay Scale <span id="preDelayScaleValue"></span></label>
+          <input id="preDelayScale" type="range" min="0" max="200" step="5">
+        </div>
+
+        <div class="field">
+          <label for="tailGainScale">Reverb Tail Level <span id="tailGainScaleValue"></span></label>
+          <input id="tailGainScale" type="range" min="0" max="200" step="5">
+        </div>
+
+        <div class="field">
+          <label for="reflectionSpacing">Reflection Spacing <span id="reflectionSpacingValue"></span></label>
+          <input id="reflectionSpacing" type="range" min="50" max="200" step="5">
+        </div>
+
+        <div class="field">
+          <label for="dynamicWetTrimStrength">Auto Wet Trim <span id="dynamicWetTrimStrengthValue"></span></label>
+          <input id="dynamicWetTrimStrength" type="range" min="0" max="200" step="5">
+        </div>
+      </div>
+    </details>
+
+  </main>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

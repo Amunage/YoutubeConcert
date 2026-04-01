@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "YT Concert Live",
+  "description": "Capture the current tab audio, process it like a live venue, and play it back in real time.",
+  "version": "0.1.0",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tabCapture",
+    "offscreen"
+  ],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "YT Concert Live",
+    "default_popup": "src/popup/popup.html"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/offscreen/audio/processor.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
+}
