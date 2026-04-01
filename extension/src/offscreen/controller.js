@@ -11,6 +11,16 @@ let activeState = {
   settings: DEFAULT_SETTINGS,
 };
 
+function resetActiveState() {
+  activeState = {
+    running: false,
+    tabId: null,
+    tabTitle: "",
+    startedAt: 0,
+    settings: activeState.settings || DEFAULT_SETTINGS,
+  };
+}
+
 async function sendState() {
   await chrome.runtime.sendMessage({
     type: "offscreen:state",
@@ -60,13 +70,7 @@ async function startCapture(payload) {
 
 async function stopCapture() {
   await engine.stop();
-  activeState = {
-    running: false,
-    tabId: null,
-    tabTitle: "",
-    startedAt: 0,
-    settings: activeState.settings || DEFAULT_SETTINGS,
-  };
+  resetActiveState();
   await sendState();
 }
 
@@ -75,10 +79,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === "offscreen:get-state") {
+    sendResponse({ ok: true, state: activeState });
+    return false;
+  }
+
   if (message.type === "offscreen:start-capture") {
     startCapture(message.payload)
       .then(() => sendResponse({ ok: true }))
-      .catch((error) => {
+      .catch(async (error) => {
+        await engine.stop().catch(() => {});
+        resetActiveState();
+        await sendState().catch(() => {});
         sendError(error).catch(() => {});
         sendResponse({ ok: false, error: error.message });
       });

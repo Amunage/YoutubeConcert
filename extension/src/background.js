@@ -1,4 +1,5 @@
 const OFFSCREEN_PATH = "src/offscreen/offscreen.html";
+const SESSION_STATE_KEY = "concertSessionState";
 
 let sessionState = {
   running: false,
@@ -8,6 +9,48 @@ let sessionState = {
   settings: null,
   lastError: "",
 };
+
+let sessionStateReady = null;
+
+function getDefaultSessionState() {
+  return {
+    running: false,
+    tabId: null,
+    tabTitle: "",
+    startedAt: 0,
+    settings: null,
+    lastError: "",
+  };
+}
+
+async function ensureSessionStateLoaded() {
+  if (!sessionStateReady) {
+    sessionStateReady = chrome.storage.session.get(SESSION_STATE_KEY)
+      .then((stored) => {
+        sessionState = {
+          ...getDefaultSessionState(),
+          ...(stored?.[SESSION_STATE_KEY] || {}),
+        };
+      })
+      .catch(() => {
+        sessionState = getDefaultSessionState();
+      });
+  }
+
+  await sessionStateReady;
+}
+
+async function persistSessionState() {
+  await chrome.storage.session.set({ [SESSION_STATE_KEY]: sessionState });
+}
+
+async function setSessionState(nextState) {
+  sessionState = {
+    ...getDefaultSessionState(),
+    ...nextState,
+  };
+  await persistSessionState();
+}
 
 async function hasOffscreenDocument() {
   const contexts = await chrome.runtime.getContexts({
@@ -53,7 +96,43 @@ async function getTabForCapture(tabId) {
   return activeTab;
 }
 
+async function syncStateFromOffscreen() {
+  if (!(await hasOffscreenDocument())) {
+    if (sessionState.running) {
+      await setSessionState({
+        ...sessionState,
+        running: false,
+        tabId: null,
+        tabTitle: "",
+        startedAt: 0,
+      });
+    }
+    return sessionState;
+  }
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "offscreen:get-state",
+      target: "offscreen",
+    });
+    if (response?.ok && response.state) {
+      await setSessionState({
+        ...sessionState,
+        ...response.state,
+        lastError: sessionState.lastError,
+      });
+    }
+  } catch {
+  }
+
+  return sessionState;
+}
+
 async function startCapture(request = {}) {
+  await ensureSessionStateLoaded();
+  if (await hasOffscreenDocument()) {
+    await closeOffscreenDocument().catch(() => {});
+  }
   const targetTab = await getTabForCapture(request.tabId);
   await ensureOffscreenDocument();
 
@@ -61,14 +140,14 @@ async function startCapture(request = {}) {
     targetTabId: targetTab.id,
   });
 
-  sessionState = {
+  await setSessionState({
     running: true,
     tabId: targetTab.id,
     tabTitle: targetTab.title || "",
     startedAt: Date.now(),
     settings: request.settings || null,
     lastError: "",
-  };
+  });
 
   await chrome.runtime.sendMessage({
     type: "offscreen:start-capture",
@@ -84,23 +163,38 @@ async function startCapture(request = {}) {
   return sessionState;
 }
 
+async function handleCaptureFailure(errorMessage = "An audio processing error occurred.") {
+  await setSessionState({
+    ...sessionState,
+    running: false,
+    tabId: null,
+    tabTitle: "",
+    startedAt: 0,
+    lastError: errorMessage,
+  });
+  await closeOffscreenDocument().catch(() => {});
+  broadcastSessionState();
+  return sessionState;
+}
+
 async function stopCapture() {
+  await ensureSessionStateLoaded();
   try {
     await chrome.runtime.sendMessage({
       type: "offscreen:stop-capture",
       target: "offscreen",
     });
-  } catch (error) {
+  } catch {
   }
 
-  sessionState = {
+  await setSessionState({
     running: false,
     tabId: null,
     tabTitle: "",
     startedAt: 0,
     settings: null,
     lastError: "",
-  };
+  });
 
   await closeOffscreenDocument();
   return sessionState;
@@ -119,20 +213,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "popup:get-state") {
-    sendResponse({ ok: true, state: sessionState });
-    return false;
+    ensureSessionStateLoaded()
+      .then(() => syncStateFromOffscreen())
+      .then((state) => sendResponse({ ok: true, state }))
+      .catch(() => sendResponse({ ok: true, state: sessionState }));
+    return true;
   }
 
   if (message.type === "popup:start-capture") {
     startCapture(message.payload)
       .then((state) => sendResponse({ ok: true, state }))
-      .catch((error) => {
-        sessionState = {
-          ...sessionState,
-          running: false,
-          lastError: error.message || "Could not start tab audio capture.",
-        };
-        sendResponse({ ok: false, error: sessionState.lastError, state: sessionState });
+      .catch(async (error) => {
+        const failedState = await handleCaptureFailure(error.message || "Could not start tab audio capture.");
+        sendResponse({ ok: false, error: failedState.lastError, state: failedState });
       });
     return true;
   }
@@ -147,37 +240,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "popup:update-settings") {
-    sessionState = {
-      ...sessionState,
-      settings: message.payload?.settings || sessionState.settings,
-    };
+    ensureSessionStateLoaded()
+      .then(async () => {
+        await setSessionState({
+          ...sessionState,
+          settings: message.payload?.settings || sessionState.settings,
+        });
 
-    chrome.runtime.sendMessage({
-      type: "offscreen:update-settings",
-      target: "offscreen",
-      payload: {
-        settings: sessionState.settings,
-      },
-    }).catch(() => {});
+        chrome.runtime.sendMessage({
+          type: "offscreen:update-settings",
+          target: "offscreen",
+          payload: {
+            settings: sessionState.settings,
+          },
+        }).catch(() => {});
 
-    sendResponse({ ok: true, state: sessionState });
-    return false;
+        sendResponse({ ok: true, state: sessionState });
+      })
+      .catch(() => sendResponse({ ok: false, error: "Could not update settings." }));
+    return true;
   }
 
   if (message.type === "offscreen:state") {
-    sessionState = {
-      ...sessionState,
-      ...message.payload,
-    };
+    ensureSessionStateLoaded()
+      .then(() => setSessionState({ ...sessionState, ...message.payload }))
+      .catch(() => {});
     return false;
   }
 
   if (message.type === "offscreen:error") {
-    sessionState = {
-      ...sessionState,
-      running: false,
-      lastError: message.payload?.error || "An audio processing error occurred.",
-    };
+    handleCaptureFailure(message.payload?.error || "An audio processing error occurred.").catch(() => {});
     return false;
   }
 
@@ -185,29 +277,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (sessionState.tabId !== tabId) {
-    return;
-  }
-  stopCapture().catch(() => {});
+  ensureSessionStateLoaded()
+    .then(() => {
+      if (sessionState.tabId !== tabId) {
+        return;
+      }
+      return stopCapture();
+    })
+    .catch(() => {});
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (!sessionState.running || sessionState.tabId !== tabId) {
-    return;
-  }
+  ensureSessionStateLoaded()
+    .then(async () => {
+      if (!sessionState.running || sessionState.tabId !== tabId) {
+        return;
+      }
 
-  if (typeof changeInfo.title !== "string" && typeof tab?.title !== "string") {
-    return;
-  }
+      if (typeof changeInfo.title !== "string" && typeof tab?.title !== "string") {
+        return;
+      }
 
-  const nextTitle = changeInfo.title || tab?.title || "";
-  if (sessionState.tabTitle === nextTitle) {
-    return;
-  }
+      const nextTitle = changeInfo.title || tab?.title || "";
+      if (sessionState.tabTitle === nextTitle) {
+        return;
+      }
 
-  sessionState = {
-    ...sessionState,
-    tabTitle: nextTitle,
-  };
-  broadcastSessionState();
+      await setSessionState({
+        ...sessionState,
+        tabTitle: nextTitle,
+      });
+      broadcastSessionState();
+    })
+    .catch(() => {});
 });
