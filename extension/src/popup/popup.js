@@ -4,6 +4,7 @@ const controls = {
   toggleButton: document.getElementById("toggleButton"),
   statusText: document.getElementById("statusText"),
   tabMeta: document.getElementById("tabMeta"),
+  appVersion: document.getElementById("appVersion"),
   advancedOptions: document.getElementById("advancedOptions"),
   roomPreset: document.getElementById("roomPreset"),
   audiencePreset: document.getElementById("audiencePreset"),
@@ -34,6 +35,8 @@ const controls = {
   dynamicWetTrimStrength: document.getElementById("dynamicWetTrimStrength"),
   dynamicWetTrimStrengthValue: document.getElementById("dynamicWetTrimStrengthValue"),
 };
+
+controls.appVersion.textContent = `v${chrome.runtime.getManifest().version}`;
 
 const SETTINGS_STORAGE_KEY = "concertSettings";
 const ADVANCED_OPEN_KEY = "concertAdvancedOpen";
