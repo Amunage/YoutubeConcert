@@ -12,12 +12,31 @@ export function createDisconnectCleanup(nodes = []) {
     cleanedUp = true;
     const uniqueNodes = new Set();
     nodes.forEach((node) => {
-      if (node && typeof node.disconnect === "function") {
+      if (
+        node &&
+        (
+          typeof node.disconnect === "function" ||
+          typeof node.stop === "function"
+        )
+      ) {
         uniqueNodes.add(node);
       }
     });
     uniqueNodes.forEach((node) => {
-      if (!node || typeof node.disconnect !== "function") return;
+      if (!node) return;
+      if ("onended" in node) {
+        try {
+          node.onended = null;
+        } catch (error) {
+        }
+      }
+      if (typeof node.stop === "function") {
+        try {
+          node.stop();
+        } catch (error) {
+        }
+      }
+      if (typeof node.disconnect !== "function") return;
       try {
         node.disconnect();
       } catch (error) {

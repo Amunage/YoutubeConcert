@@ -28,6 +28,9 @@ function measure(name, startMark, endMark) {
     performance.clearMarks(startMark);
     performance.clearMarks(endMark);
   }
+  if (typeof performance?.clearMeasures === "function") {
+    performance.clearMeasures(name);
+  }
 }
 
 export class LiveConcertEngine {
