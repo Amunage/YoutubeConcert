@@ -132,6 +132,109 @@ body {
   border-top: 1px solid var(--line);
 }
 
+.experimental-section {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(240, 141, 73, 0.2);
+}
+
+.advanced-actions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.experimental-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.experimental-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #f4b17e;
+}
+
+.experimental-copy {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.toggle-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(240, 141, 73, 0.18);
+  border-radius: 14px;
+  background: rgba(240, 141, 73, 0.06);
+  cursor: pointer;
+}
+
+.toggle-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.toggle-title {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.toggle-note {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+input[type="checkbox"][role="switch"] {
+  width: 42px;
+  height: 24px;
+  margin: 0;
+  flex: 0 0 auto;
+  appearance: none;
+  border: 1px solid rgba(145, 161, 183, 0.3);
+  border-radius: 999px;
+  background: rgba(11, 16, 24, 0.9);
+  position: relative;
+  display: inline-block;
+  vertical-align: middle;
+  overflow: hidden;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+input[type="checkbox"][role="switch"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #dce5f2;
+  transition: transform 120ms ease;
+}
+
+input[type="checkbox"][role="switch"]:checked {
+  background: linear-gradient(180deg, var(--accent), var(--accent-strong));
+  border-color: rgba(240, 141, 73, 0.66);
+}
+
+input[type="checkbox"][role="switch"]:checked::after {
+  transform: translateX(18px);
+}
+
 label {
   display: flex;
   justify-content: space-between;
@@ -179,6 +282,25 @@ input[type="range"] {
   box-shadow: 0 12px 24px rgba(66, 127, 80, 0.3);
 }
 
+.secondary-button {
+  min-width: 116px;
+  height: 34px;
+  border: 1px solid rgba(145, 161, 183, 0.22);
+  border-radius: 999px;
+  padding: 0 14px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text);
+  background: rgba(11, 16, 24, 0.86);
+  cursor: pointer;
+}
+
+.secondary-button:hover {
+  border-color: rgba(240, 141, 73, 0.38);
+  background: rgba(20, 27, 39, 0.96);
+}
+
 .note {
   margin: 8px 0 0;
   color: var(--muted);
@@ -189,7 +311,62 @@ input[type="range"] {
   margin: 8px 0 0;
   color: #d9e1f0;
   font-size: 11px;
-  line-height: 1.5;
+  line-height: 1;
+  height: 16px;
+  overflow: hidden;
+  white-space: nowrap;
+  position: relative;
+}
+
+.tab-meta::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 28px;
+  height: 100%;
+  background: linear-gradient(90deg, rgba(18, 24, 34, 0), rgba(18, 24, 34, 0.92));
+  pointer-events: none;
+}
+
+.tab-meta-track {
+  display: inline-flex;
+  align-items: center;
+  min-width: max-content;
+  height: 100%;
+  gap: 60px;
+}
+
+.tab-meta-text {
+  display: inline-block;
+  min-width: 0;
+}
+
+.tab-meta-text-clone {
+  visibility: hidden;
+}
+
+.tab-meta.is-empty::after {
+  display: none;
+}
+
+.tab-meta.is-scrolling .tab-meta-track {
+  animation: tab-marquee var(--tab-scroll-duration, 12s) linear infinite;
+  will-change: transform;
+}
+
+.tab-meta.is-scrolling .tab-meta-text-clone {
+  visibility: visible;
+}
+
+@keyframes tab-marquee {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(calc(-1 * var(--tab-scroll-distance, 0px)));
+  }
 }
 
 .app-version {

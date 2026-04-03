@@ -18,30 +18,30 @@
       <div>
         <p class="label">Status</p>
         <p id="statusText" class="status-text">Idle</p>
-        <p id="tabMeta" class="tab-meta"></p>
+        <p id="tabMeta" class="tab-meta" aria-label="Current tab title">
+          <span id="tabMetaTrack" class="tab-meta-track">
+            <span id="tabMetaText" class="tab-meta-text"></span>
+            <span id="tabMetaTextClone" class="tab-meta-text tab-meta-text-clone" aria-hidden="true"></span>
+          </span>
+        </p>
       </div>
-      <button id="toggleButton" class="primary-button" type="button">Start Current Tab</button>
+      <button id="toggleButton" class="primary-button" type="button">Start</button>
     </section>
 
     <section class="card">
       <div class="field">
         <label for="roomPreset">Space Preset</label>
         <select id="roomPreset">
-          <option value="dry">Dry</option>
-          <option value="stage">Stage</option>
-          <option value="hall">Concert Hall</option>
-          <option value="cathedral">Cathedral</option>
+          <option value="club">Club</option>
+          <option value="theater">Theater</option>
+          <option value="arena">Arena</option>
+          <option value="stadium">Stadium</option>
         </select>
       </div>
 
       <div class="field">
-        <label for="audiencePreset">Listener Position</label>
-        <select id="audiencePreset">
-          <option value="front">Front Row</option>
-          <option value="mid">Middle</option>
-          <option value="rear">Rear</option>
-          <option value="outside">Outside</option>
-        </select>
+        <label for="audiencePosition">Listener Position <span id="audiencePositionValue"></span></label>
+        <input id="audiencePosition" type="range" min="1" max="10" step="1">
       </div>
 
       <div class="field">
@@ -115,6 +115,43 @@
         <div class="field">
           <label for="dynamicWetTrimStrength">Auto Wet Trim <span id="dynamicWetTrimStrengthValue"></span></label>
           <input id="dynamicWetTrimStrength" type="range" min="0" max="200" step="5">
+        </div>
+
+        <section class="experimental-section" aria-labelledby="experimentalTitle">
+          <div class="experimental-header">
+            <div>
+              <p id="experimentalTitle" class="experimental-title">Experimental</p>
+              <p class="experimental-copy">Optional tests that stay off by default.</p>
+            </div>
+          </div>
+
+          <label class="toggle-field" for="experimentalLargeSpaceModulation">
+            <div class="toggle-copy">
+              <span class="toggle-title">Large Space Micro Modulation</span>
+              <span class="toggle-note">Adds a very subtle moving texture to large-space tails. Best reserved for Arena/Stadium listening tests.</span>
+            </div>
+            <input id="experimentalLargeSpaceModulation" type="checkbox" role="switch">
+          </label>
+
+          <label class="toggle-field" for="experimentalSubtleSpaceResponse">
+            <div class="toggle-copy">
+              <span class="toggle-title">Subtle Space Response</span>
+              <span class="toggle-note">Adds a faint halo-like space bloom behind late reverb so large rooms feel less empty without introducing crowd noise.</span>
+            </div>
+            <input id="experimentalSubtleSpaceResponse" type="checkbox" role="switch">
+          </label>
+
+          <label class="toggle-field" for="experimentalCrowdReaction">
+            <div class="toggle-copy">
+              <span class="toggle-title">Crowd Reaction Layer</span>
+              <span class="toggle-note">Adds a low-level crowd-air bed behind late reverb for a stronger live venue feel. Intentionally bold and best used as an A/B experiment.</span>
+            </div>
+            <input id="experimentalCrowdReaction" type="checkbox" role="switch">
+          </label>
+        </section>
+
+        <div class="advanced-actions">
+          <button id="resetAdvancedButton" class="secondary-button" type="button">Reset Advanced</button>
         </div>
       </div>
     </details>

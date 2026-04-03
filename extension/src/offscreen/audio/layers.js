@@ -1,13 +1,18 @@
-import { clamp, getAudienceTrackProfile } from "../../lib/presets.js";
+import { clamp } from "../../lib/presets.js";
+import { getReflectionPan } from "./effects.js";
 import {
-  getAuxiliaryTapCount,
-  getLayerBlend,
-  getLayerVariation,
-  getPanPosition,
-  getReflectionPan,
-  getTrackEffectStrength,
-  getTrackVolume,
-} from "./effects.js";
+  buildLayerAdaptiveWetCache,
+  buildLayerComputationCache,
+  buildLayerVariationCache,
+  computeLayerState,
+  computeSendValues,
+} from "./layer-math.js";
+import {
+  getEarlyPreDelaySeconds,
+  getLatePreDelaySeconds,
+  getLayerDelaySeconds,
+  setAudioParam,
+} from "./layer-utils.js";
 
 function collectNodes(list, ...nodes) {
   nodes.flat().forEach((node) => {
@@ -18,6 +23,19 @@ function collectNodes(list, ...nodes) {
 }
 
 function makeSendChain(context, source, target, config, cleanupNodes) {
+  if (config.enabled === false) {
+    return {
+      gain: null,
+      preDelay: null,
+      highpass: null,
+      lowpass: null,
+      bandpass: null,
+      lowShelf: null,
+      panner: null,
+      nodes: [],
+    };
+  }
+
   const gain = context.createGain();
   gain.gain.value = config.gainValue;
   const nodes = [gain];
@@ -88,192 +106,7 @@ function makeSendChain(context, source, target, config, cleanupNodes) {
   return { gain, preDelay, highpass, lowpass, bandpass, lowShelf, panner, nodes };
 }
 
-function setAudioParam(param, value, context, timeConstant = 0.03) {
-  if (!param || typeof value !== "number") {
-    return;
-  }
-  param.cancelScheduledValues(context.currentTime);
-  param.setTargetAtTime(value, context.currentTime, timeConstant);
-}
-
-function computeLayerState({
-  room,
-  audience,
-  audienceTrack,
-  safe,
-  trackCount,
-  index,
-  complexity,
-  reflectionPattern,
-  layerCache,
-  layerVariationCache,
-}) {
-  const layerBlend = layerCache.layerBlends[index];
-  const variation = layerVariationCache[index];
-  const trackVolume = layerCache.trackVolumes[index] / 100;
-  const reverbDrive = layerCache.reverbStrengths[index];
-  const suppressionDrive = layerCache.suppressionStrengths[index];
-  const distanceBlend = clamp(layerBlend * (0.42 + room.distanceEq) + audience.distanceOffset, 0, 1.25);
-  const basePan = clamp(
-    getPanPosition(index, trackCount, room.stereoWidth * audience.stereoWidth) + variation.panOffset,
-    -0.84,
-    0.84,
-  );
-  const adjustedVolume = trackVolume * audienceTrack.volumeScale * variation.gainScale;
-  const directMixLevel = audience.directMixTrim * Math.max(0.82, 1 - layerBlend * 0.12);
-  const wetMixTrim = audienceTrack.wetMixTrim || 0;
-  const leadClarity = audienceTrack.clarityBoost || 0;
-  const airAbsorptionDrive = distanceBlend * (0.9 + room.distanceEq * 0.35) + audience.extraHighCut * 0.42;
-  const dynamicWetTrim = clamp(
-    1 - (
-      (audience.dynamicWetTrimStrength || 0) * (
-        distanceBlend * 0.52 +
-        (reverbDrive / 100) * 0.26 +
-        clamp(adjustedVolume, 0, 1.5) * 0.18 +
-        layerBlend * 0.08
-      )
-    ),
-    0.56,
-    1,
-  );
-  const reflectionDensity = reflectionPattern.length / Math.max(1, room.earlyReflections.length);
-  const reflectionTapCount = getAuxiliaryTapCount(room.earlyReflections.length, trackCount, layerBlend, 1, complexity.tapDensityScale);
-  const wetMix = Math.max(
-    0,
-    room.wetMix *
-      audience.wetMix *
-      dynamicWetTrim *
-      (1 + wetMixTrim) *
-      (reverbDrive / 100) *
-      (0.48 + reverbDrive / 92) *
-      (0.42 + layerBlend * 0.78),
-  );
-
-  return {
-    layerBlend,
-    variation,
-    reverbDrive,
-    suppressionDrive,
-    distanceBlend,
-    basePan,
-    adjustedVolume,
-    directMixLevel,
-    wetMixTrim,
-    leadClarity,
-    airAbsorptionDrive,
-    dynamicWetTrim,
-    reflectionDensity,
-    reflectionTapCount,
-    wetMix,
-  };
-}
-
-function computeSendValues({
-  room,
-  audience,
-  safe,
-  trackCount,
-  index,
-  complexity,
-  layerState,
-}) {
-  const {
-    layerBlend,
-    distanceBlend,
-    reverbDrive,
-    adjustedVolume,
-    dynamicWetTrim,
-    reflectionDensity,
-    reflectionTapCount,
-    wetMix,
-  } = layerState;
-
-  const smearDensity = audience.smearTapMs.length
-    ? getAuxiliaryTapCount(audience.smearTapMs.length, trackCount, layerBlend, 2, complexity.tapDensityScale) / audience.smearTapMs.length
-    : 0;
-  const blurDensity = audience.transientBlurTapMs.length
-    ? getAuxiliaryTapCount(audience.transientBlurTapMs.length, trackCount, layerBlend, 1, complexity.tapDensityScale) / audience.transientBlurTapMs.length
-    : 0;
-  const reflectionDepthTrim = clamp(
-    1 - (audience.reflectionDepthTrimStrength || 0) * Math.pow(layerBlend, 1.15),
-    0.42,
-    1,
-  );
-
-  return {
-    earlyGainValue: Math.min(
-      0.26,
-      wetMix * room.earlyWetMix * 0.48 * audience.tailGainScale * Math.max(0.72, dynamicWetTrim) * Math.max(0.58, 0.96 - distanceBlend * 0.16),
-    ),
-    lateGainValue: Math.min(
-      0.34,
-      wetMix * room.lateWetMix * 0.58 * audience.tailGainScale * dynamicWetTrim * (0.72 + distanceBlend * 0.16) * complexity.lateWetScale,
-    ),
-    diffusionGainValue: complexity.allowDiffusion
-      ? Math.min(
-          0.28,
-          audience.diffusionMix * (safe.diffusionAmount / 100) * (0.42 + reverbDrive / 110) * (0.62 + distanceBlend * 0.42) * Math.max(0.7, dynamicWetTrim),
-        )
-      : 0,
-    smearGainValue:
-      adjustedVolume *
-      (safe.auxiliaryAmount / 100) *
-      audience.smearGain *
-      Math.max(0.03, 0.14 * smearDensity) *
-      (0.78 + layerBlend * 0.22),
-    blurGainValue:
-      adjustedVolume *
-      (safe.auxiliaryAmount / 100) *
-      audience.transientBlurGain *
-      Math.max(0.03, 0.11 * blurDensity) *
-      (0.82 + layerBlend * 0.18),
-    reflectionGainValue:
-      adjustedVolume *
-      (safe.auxiliaryAmount / 100) *
-      Math.max(0.02, 0.18 * reflectionDensity) *
-      Math.max(0.18, 1 - distanceBlend * 0.28) *
-      (0.7 + layerBlend * 0.45) *
-      audience.reflectionBoost *
-      dynamicWetTrim *
-      reflectionDepthTrim *
-      Math.max(0.3, reflectionTapCount / Math.max(1, room.earlyReflections.length)),
-  };
-}
-
-export function buildLayerVariationCache(variationSeedBase, trackCount, roomPreset, audiencePreset) {
-  const totalTracks = Math.max(1, trackCount || 1);
-  const cache = [];
-  for (let index = 0; index < totalTracks; index += 1) {
-    cache.push(getLayerVariation(variationSeedBase, index, totalTracks, roomPreset, audiencePreset));
-  }
-  return cache;
-}
-
-export function buildLayerComputationCache(trackCount, baseVolume, volumeDecay, reverbIntensity, peakSuppression, audiencePreset) {
-  const totalTracks = Math.max(1, trackCount || 1);
-  const cache = {
-    layerBlends: [],
-    trackVolumes: [],
-    shapedVolumes: [],
-    audienceTracks: [],
-    reverbStrengths: [],
-    suppressionStrengths: [],
-  };
-
-  for (let index = 0; index < totalTracks; index += 1) {
-    const layerBlend = getLayerBlend(index, totalTracks);
-    const audienceTrack = getAudienceTrackProfile(audiencePreset, index, totalTracks);
-    const trackVolume = getTrackVolume(baseVolume, volumeDecay, index);
-    cache.layerBlends.push(layerBlend);
-    cache.trackVolumes.push(trackVolume);
-    cache.shapedVolumes.push((trackVolume / 100) * Math.max(0.24, 1 - index * 0.08));
-    cache.audienceTracks.push(audienceTrack);
-    cache.reverbStrengths.push(clamp(getTrackEffectStrength(reverbIntensity, index) + audienceTrack.reverbExtra, 0, 100));
-    cache.suppressionStrengths.push(clamp(getTrackEffectStrength(peakSuppression, index) + audienceTrack.suppressionExtra, 0, 100));
-  }
-
-  return cache;
-}
+export { buildLayerAdaptiveWetCache, buildLayerComputationCache, buildLayerVariationCache };
 
 export function buildLayerChain({
   context,
@@ -295,15 +128,17 @@ export function buildLayerChain({
   reflectionPattern,
   layerCache = null,
   layerVariationCache = null,
+  adaptiveWetMix = 1,
 }) {
   const cleanupNodes = [];
-  const safeLayerCache = layerCache || buildLayerComputationCache(trackCount, safe.ensembleVolume, safe.volumeDecay, safe.reverbIntensity, safe.peakSuppression, safe.audiencePreset);
+  const safeLayerCache = layerCache || buildLayerComputationCache(trackCount, safe.ensembleVolume, safe.volumeDecay, safe.reverbIntensity, safe.peakSuppression, safe.audiencePosition, room);
   const safeVariationCache = layerVariationCache || buildLayerVariationCache("live", trackCount, safe.roomPreset, safe.audiencePreset);
   const layerState = computeLayerState({
     room,
     audience,
     audienceTrack,
     safe,
+    adaptiveWetMix,
     trackCount,
     index,
     complexity,
@@ -317,6 +152,8 @@ export function buildLayerChain({
     reverbDrive,
     suppressionDrive,
     distanceBlend,
+    widthProfile,
+    centerImage,
     basePan,
     adjustedVolume,
     directMixLevel,
@@ -334,7 +171,7 @@ export function buildLayerChain({
   });
 
   const layerDelay = context.createDelay(0.8);
-  layerDelay.delayTime.value = Math.max(0, (safe.delayMs * audience.delayScale * index) / 1000);
+  layerDelay.delayTime.value = getLayerDelaySeconds(safe, audience, room, index);
 
   const lowpass = context.createBiquadFilter();
   lowpass.type = "lowpass";
@@ -366,30 +203,54 @@ export function buildLayerChain({
   airPresenceShelf.type = "highshelf";
   airPresenceShelf.frequency.value = Math.max(1800, 2200 - audience.articulationCutHz * 0.08);
   airPresenceShelf.gain.value =
-    -(airAbsorptionDrive * (2.6 + audience.extraHighCut * 1.8) + audience.articulationCutHz / 2600) +
-    leadClarity * 0.28;
+    -(
+      airAbsorptionDrive * (
+        (audience.airPresenceAbsorptionScale ?? 2.6) +
+        audience.extraHighCut * (audience.airPresenceExtraHighCutScale ?? 1.8)
+      ) +
+      audience.articulationCutHz / (audience.airPresenceArticulationScale ?? 2600)
+    ) +
+    leadClarity * (audience.airPresenceLeadScale ?? 0.28);
 
   const airBrillianceShelf = context.createBiquadFilter();
   airBrillianceShelf.type = "highshelf";
   airBrillianceShelf.frequency.value = 7600;
   airBrillianceShelf.gain.value =
-    -(airAbsorptionDrive * (5.4 + room.distanceEq * 1.8 + audience.extraHighCut * 3.4) + audience.directCutHz / 1200) +
-    leadClarity * 0.18;
+    -(
+      airAbsorptionDrive * (
+        (audience.airBrillianceAbsorptionScale ?? 5.4) +
+        room.distanceEq * (audience.airBrillianceRoomEqScale ?? 1.8) +
+        audience.extraHighCut * (audience.airBrillianceExtraHighCutScale ?? 3.4)
+      ) +
+      audience.directCutHz / (audience.airBrillianceDirectCutScale ?? 1200)
+    ) +
+    leadClarity * (audience.airBrillianceLeadScale ?? 0.18);
 
   const presenceDip = context.createBiquadFilter();
   presenceDip.type = "peaking";
   presenceDip.frequency.value = Math.max(
     1000,
-    2900 - audience.articulationCutHz * 0.24 + variation.articulationOffsetHz * 0.34,
+    (audience.presenceFrequencyBase ?? 2900) -
+      audience.articulationCutHz * (audience.presenceArticulationScale ?? 0.24) +
+      variation.articulationOffsetHz * (audience.presenceVariationScale ?? 0.34),
   );
   presenceDip.Q.value = 0.82;
-  presenceDip.gain.value = audience.presenceDipDb * (0.72 + layerBlend * 0.42) + leadClarity * 0.55;
+  presenceDip.gain.value =
+    audience.presenceDipDb * (0.72 + layerBlend * (audience.presenceLayerScale ?? 0.42)) +
+    leadClarity * (audience.presenceLeadScale ?? 0.55);
 
   const transientDip = context.createBiquadFilter();
   transientDip.type = "peaking";
-  transientDip.frequency.value = Math.max(1800, 3400 + layerBlend * 560 + variation.articulationOffsetHz);
+  transientDip.frequency.value = Math.max(
+    1800,
+    (audience.transientFrequencyBase ?? 3400) +
+      layerBlend * (audience.transientLayerFrequencyScale ?? 560) +
+      variation.articulationOffsetHz * (audience.transientVariationScale ?? 1),
+  );
   transientDip.Q.value = 1.28;
-  transientDip.gain.value = audience.transientDipDb * (0.96 + layerBlend * 0.28) + leadClarity * 0.72;
+  transientDip.gain.value =
+    audience.transientDipDb * (0.96 + layerBlend * (audience.transientLayerScale ?? 0.28)) +
+    leadClarity * (audience.transientLeadScale ?? 0.72);
 
   const lowShelf = context.createBiquadFilter();
   lowShelf.type = "lowshelf";
@@ -397,11 +258,32 @@ export function buildLayerChain({
   lowShelf.gain.value = -distanceBlend * (3.8 + audience.directCutHz * 0.0012);
 
   const compressor = context.createDynamicsCompressor();
-  compressor.threshold.value = -15 - suppressionDrive * 0.085 - layerBlend * 8.5;
-  compressor.knee.value = 18 + reverbDrive * 0.17;
-  compressor.ratio.value = Math.min(18, 1.8 + suppressionDrive * 0.07 + layerBlend * 4.6);
-  compressor.attack.value = Math.max(0.0015, 0.017 - suppressionDrive * 0.00008 - layerBlend * 0.006);
-  compressor.release.value = Math.min(0.9, 0.16 + layerBlend * 0.22 + suppressionDrive * 0.003 + reverbDrive * 0.0015);
+  compressor.threshold.value =
+    (audience.compressorThresholdBase ?? -15) -
+    suppressionDrive * (audience.compressorThresholdSuppressionScale ?? 0.085) -
+    layerBlend * (audience.compressorThresholdLayerScale ?? 8.5);
+  compressor.knee.value =
+    (audience.compressorKneeBase ?? 18) +
+    reverbDrive * (audience.compressorKneeReverbScale ?? 0.17);
+  compressor.ratio.value = Math.min(
+    audience.compressorRatioMax ?? 18,
+    (audience.compressorRatioBase ?? 1.8) +
+      suppressionDrive * (audience.compressorRatioSuppressionScale ?? 0.07) +
+      layerBlend * (audience.compressorRatioLayerScale ?? 4.6),
+  );
+  compressor.attack.value = Math.max(
+    audience.compressorAttackMin ?? 0.0015,
+    (audience.compressorAttackBase ?? 0.017) -
+      suppressionDrive * (audience.compressorAttackSuppressionScale ?? 0.00008) -
+      layerBlend * (audience.compressorAttackLayerScale ?? 0.006),
+  );
+  compressor.release.value = Math.min(
+    audience.compressorReleaseMax ?? 0.9,
+    (audience.compressorReleaseBase ?? 0.16) +
+      layerBlend * (audience.compressorReleaseLayerScale ?? 0.22) +
+      suppressionDrive * (audience.compressorReleaseSuppressionScale ?? 0.003) +
+      reverbDrive * (audience.compressorReleaseReverbScale ?? 0.0015),
+  );
 
   const dryGain = context.createGain();
   dryGain.gain.value = adjustedVolume * Math.max(0.06, 1 - distanceBlend * 0.22) * audience.dryGain * directMixLevel;
@@ -409,8 +291,14 @@ export function buildLayerChain({
   const dryTrimGain = context.createGain();
   dryTrimGain.gain.value = 1;
 
+  const centerAnchorGain = context.createGain();
+  centerAnchorGain.gain.value = centerImage.anchor;
+
   const panner = context.createStereoPanner();
   panner.pan.value = basePan;
+
+  const stereoAnchorGain = context.createGain();
+  stereoAnchorGain.gain.value = 1 - centerImage.anchor;
 
   collectNodes(
     cleanupNodes,
@@ -426,7 +314,9 @@ export function buildLayerChain({
     compressor,
     dryGain,
     dryTrimGain,
+    centerAnchorGain,
     panner,
+    stereoAnchorGain,
   );
 
   processedInput.connect(layerDelay);
@@ -441,64 +331,96 @@ export function buildLayerChain({
   lowShelf.connect(compressor);
   compressor.connect(dryGain);
   dryGain.connect(dryTrimGain);
+  dryTrimGain.connect(centerAnchorGain);
+  centerAnchorGain.connect(mix);
   dryTrimGain.connect(panner);
-  panner.connect(mix);
+  panner.connect(stereoAnchorGain);
+  stereoAnchorGain.connect(mix);
 
   const earlySend = makeSendChain(context, compressor, earlyInput, {
+    enabled: true,
     gainValue: sendValues.earlyGainValue,
-    preDelaySeconds: Math.max(0, (room.earlyPreDelayMs + audience.preDelayMs * 0.24 + layerBlend * 8) * audience.preDelayScale / 1000),
-    highpassHz: Math.max(110, 170 + distanceBlend * 125 + audience.directCutHz * 0.022 + (audience.wetHighpassBoostHz || 0) * 0.35),
+    preDelaySeconds: getEarlyPreDelaySeconds({ room, audience, layerBlend, distanceBlend }),
+    highpassHz: Math.max(110, 170 + distanceBlend * 125 + audience.directCutHz * 0.022 + (audience.wetHighpassBoostHz || 0) * 0.35 + room.wetToneCut * 0.03),
     lowpassHz: Math.max(1400, 10400 - distanceBlend * 1800 - audience.wetLowpassCut * 0.42 - room.earlyToneCut),
-    lowShelfGainDb: audience.wetLowShelfCutDb || 0,
+    lowShelfGainDb: (audience.wetLowShelfCutDb || 0) - Math.min(1.2, room.wetToneCut / 900),
     lowShelfFrequencyHz: 240,
-    panValue: clamp(basePan * (0.34 + distanceBlend * 0.08), -0.52, 0.52),
+    panValue: clamp(basePan * widthProfile.wet * (0.34 + distanceBlend * 0.08), -0.68, 0.68),
   }, cleanupNodes);
 
   const lateSend = makeSendChain(context, compressor, lateInput, {
+    enabled: true,
     gainValue: sendValues.lateGainValue,
-    preDelaySeconds: Math.max(0, (room.latePreDelayMs + audience.preDelayMs + layerBlend * 18) * audience.preDelayScale / 1000),
+    preDelaySeconds: getLatePreDelaySeconds({ room, audience, layerBlend, distanceBlend }),
     lowpassHz: Math.max(220, 7600 - distanceBlend * 2500 - audience.wetLowpassCut - room.lateToneCut),
-    highpassHz: Math.max(150, 210 + distanceBlend * 170 + audience.directCutHz * 0.045 + (audience.wetHighpassBoostHz || 0)),
+    highpassHz: Math.max(140, 200 + distanceBlend * 150 + audience.directCutHz * 0.04 + (audience.wetHighpassBoostHz || 0) * 0.82 + room.wetToneCut * 0.03),
     highpassQ: 0.62,
-    lowShelfGainDb: audience.wetLowShelfCutDb || 0,
+    lowShelfGainDb: (audience.wetLowShelfCutDb || 0) - Math.min(2.2, room.wetToneCut / 520),
     lowShelfFrequencyHz: 260,
-    panValue: clamp(basePan * (0.18 + distanceBlend * 0.18), -0.38, 0.38),
+    panValue: clamp(basePan * widthProfile.wet * (0.18 + distanceBlend * 0.18), -0.54, 0.54),
   }, cleanupNodes);
 
   const diffusionSend = makeSendChain(context, compressor, diffusionInput, {
+    enabled: complexity.allowDiffusion && safe.diffusionAmount > 0,
     gainValue: sendValues.diffusionGainValue,
-    lowpassHz: Math.max(700, audience.diffusionCutHz - distanceBlend * 420 - layerBlend * 320),
-    highpassHz: Math.max(130, 170 + distanceBlend * 85 + audience.directCutHz * 0.028 + (audience.wetHighpassBoostHz || 0) * 0.6),
+    lowpassHz: Math.max(700, audience.diffusionCutHz - distanceBlend * (audience.diffusionCutDistanceScale ?? 420) - layerBlend * (audience.diffusionCutLayerScale ?? 320)),
+    highpassHz: Math.max(
+      130,
+      (audience.diffusionHighpassBaseHz ?? 170) +
+        distanceBlend * (audience.diffusionHighpassDistanceScale ?? 85) +
+        audience.directCutHz * (audience.diffusionHighpassDirectScale ?? 0.028) +
+        (audience.wetHighpassBoostHz || 0) * (audience.diffusionHighpassWetBoostScale ?? 0.6),
+    ),
     lowShelfGainDb: (audience.wetLowShelfCutDb || 0) * 0.85,
-    panValue: clamp(basePan * (0.22 + distanceBlend * 0.12), -0.48, 0.48),
+    panValue: clamp(
+      basePan * widthProfile.wet * ((audience.diffusionPanBase ?? 0.22) + distanceBlend * (audience.diffusionPanDistanceScale ?? 0.12)),
+      -0.62,
+      0.62,
+    ),
   }, cleanupNodes);
 
   const smearSend = makeSendChain(context, compressor, smearInput, {
+    enabled: safe.auxiliaryAmount > 0,
     gainValue: sendValues.smearGainValue,
-    preDelaySeconds: Math.max(0, (layerBlend * 10 + safe.delayMs * audience.delayScale * 0.012) / 1000),
-    lowpassHz: Math.max(420, 6900 - audience.smearCutHz - layerBlend * 900),
-    highpassHz: Math.max(120, 150 + distanceBlend * 78 + audience.directCutHz * 0.024),
+    preDelaySeconds: Math.max(
+      0,
+      (layerBlend * (audience.smearPreDelayLayerMs ?? 10) +
+        safe.delayMs * audience.delayScale * (room.layerDelayScale ?? 1) * (audience.smearPreDelayDelayScale ?? 0.012)) / 1000,
+    ),
+    lowpassHz: Math.max(420, (audience.smearLowpassBaseHz ?? 6900) - audience.smearCutHz - layerBlend * (audience.smearLowpassLayerScale ?? 900)),
+    highpassHz: Math.max(
+      120,
+      (audience.smearHighpassBaseHz ?? 150) +
+        distanceBlend * (audience.smearHighpassDistanceScale ?? 78) +
+        audience.directCutHz * (audience.smearHighpassDirectScale ?? 0.024),
+    ),
     highpassQ: 0.54,
-    panValue: clamp(basePan * (0.32 + distanceBlend * 0.08), -0.78, 0.78),
+    panValue: clamp(
+      basePan * widthProfile.wet * ((audience.smearPanBase ?? 0.32) + distanceBlend * (audience.smearPanDistanceScale ?? 0.08)),
+      -0.84,
+      0.84,
+    ),
   }, cleanupNodes);
 
   const blurSend = makeSendChain(context, compressor, blurInput, {
+    enabled: safe.auxiliaryAmount > 0,
     gainValue: sendValues.blurGainValue,
-    preDelaySeconds: Math.max(0, layerBlend * 4.5 / 1000),
-    bandpassHz: 2200 + layerBlend * 360,
+    preDelaySeconds: Math.max(0, layerBlend * (audience.blurPreDelayLayerMs ?? 4.5) / 1000),
+    bandpassHz: (audience.blurBandpassBaseHz ?? 2200) + layerBlend * (audience.blurBandpassLayerScale ?? 360),
     bandpassQ: 0.72,
-    lowpassHz: Math.max(1400, 5600 - audience.directCutHz * 0.5),
-    panValue: clamp(basePan * 0.2, -0.66, 0.66),
+    lowpassHz: Math.max(1400, (audience.blurLowpassBaseHz ?? 5600) - audience.directCutHz * (audience.blurLowpassDirectScale ?? 0.5)),
+    panValue: clamp(basePan * widthProfile.wet * (audience.blurPanScale ?? 0.2), -0.72, 0.72),
   }, cleanupNodes);
 
   const reflectionSend = makeSendChain(context, compressor, reflectionInput, {
+    enabled: safe.auxiliaryAmount > 0,
     gainValue: sendValues.reflectionGainValue,
-    preDelaySeconds: Math.max(0, (layerBlend * 12 + index * 2.5 + safe.delayMs * audience.delayScale * 0.02) / 1000),
+    preDelaySeconds: Math.max(0, (layerBlend * 12 + index * 2.5 + safe.delayMs * audience.delayScale * (room.layerDelayScale ?? 1) * 0.02) / 1000),
     lowpassHz: Math.max(1200, 9000 - layerBlend * 1200),
     highpassHz: Math.max(170, 220 + distanceBlend * 155 + audience.directCutHz * 0.04 + (audience.wetHighpassBoostHz || 0) * 0.9),
     highpassQ: 0.6,
     lowShelfGainDb: (audience.wetLowShelfCutDb || 0) * 1.1,
-    panValue: getReflectionPan(basePan, index, room.reflectionWidth),
+    panValue: getReflectionPan(basePan, index, room.reflectionWidth * widthProfile.reflection),
   }, cleanupNodes);
 
   return {
@@ -515,7 +437,9 @@ export function buildLayerChain({
     compressor,
     dryGain,
     dryTrimGain,
+    centerAnchorGain,
     panner,
+    stereoAnchorGain,
     earlySend,
     lateSend,
     diffusionSend,
@@ -538,6 +462,7 @@ export function updateLayerChain({
   reflectionPattern,
   layerCache,
   layerVariationCache,
+  adaptiveWetMix = 1,
 }) {
   const index = layer.index;
   const layerState = computeLayerState({
@@ -545,6 +470,7 @@ export function updateLayerChain({
     audience,
     audienceTrack,
     safe,
+    adaptiveWetMix,
     trackCount,
     index,
     complexity,
@@ -558,6 +484,9 @@ export function updateLayerChain({
     reverbDrive,
     suppressionDrive,
     distanceBlend,
+    widthProfile,
+    centerImage,
+    basePan,
     adjustedVolume,
     directMixLevel,
     leadClarity,
@@ -573,7 +502,7 @@ export function updateLayerChain({
     layerState,
   });
 
-  setAudioParam(layer.delay.delayTime, Math.max(0, (safe.delayMs * audience.delayScale * index) / 1000), context);
+  setAudioParam(layer.delay.delayTime, getLayerDelaySeconds(safe, audience, room, index), context);
   setAudioParam(
     layer.lowpass.frequency,
     Math.max(220, 13600 - distanceBlend * (2600 + reverbDrive * 14) - audience.directCutHz * 0.42 + room.directToneLift * 220 + variation.lowpassOffsetHz),
@@ -585,71 +514,232 @@ export function updateLayerChain({
     room.directToneLift - distanceBlend * (3.2 + room.distanceEq * 2.6 + audience.extraHighCut * 2.8) + leadClarity + variation.highShelfOffsetDb,
     context,
   );
-  setAudioParam(layer.airPresenceShelf.gain, -(airAbsorptionDrive * (2.6 + audience.extraHighCut * 1.8) + audience.articulationCutHz / 2600) + leadClarity * 0.28, context);
-  setAudioParam(layer.airBrillianceShelf.gain, -(airAbsorptionDrive * (5.4 + room.distanceEq * 1.8 + audience.extraHighCut * 3.4) + audience.directCutHz / 1200) + leadClarity * 0.18, context);
-  setAudioParam(layer.presenceDip.gain, audience.presenceDipDb * (0.72 + layerBlend * 0.42) + leadClarity * 0.55, context);
-  setAudioParam(layer.transientDip.gain, audience.transientDipDb * (0.96 + layerBlend * 0.28) + leadClarity * 0.72, context);
-  setAudioParam(layer.lowShelf.gain, -distanceBlend * (3.8 + audience.directCutHz * 0.0012), context);
-  setAudioParam(layer.compressor.threshold, -15 - suppressionDrive * 0.085 - layerBlend * 8.5, context);
-  setAudioParam(layer.compressor.knee, 18 + reverbDrive * 0.17, context);
-  setAudioParam(layer.compressor.ratio, Math.min(18, 1.8 + suppressionDrive * 0.07 + layerBlend * 4.6), context);
-  setAudioParam(layer.compressor.attack, Math.max(0.0015, 0.017 - suppressionDrive * 0.00008 - layerBlend * 0.006), context);
-  setAudioParam(layer.compressor.release, Math.min(0.9, 0.16 + layerBlend * 0.22 + suppressionDrive * 0.003 + reverbDrive * 0.0015), context);
-  setAudioParam(layer.dryGain.gain, adjustedVolume * Math.max(0.06, 1 - distanceBlend * 0.22) * audience.dryGain * directMixLevel, context);
-
   setAudioParam(
-    layer.earlySend.gain.gain,
-    sendValues.earlyGainValue,
+    layer.airPresenceShelf.gain,
+    -(
+      airAbsorptionDrive * (
+        (audience.airPresenceAbsorptionScale ?? 2.6) +
+        audience.extraHighCut * (audience.airPresenceExtraHighCutScale ?? 1.8)
+      ) +
+      audience.articulationCutHz / (audience.airPresenceArticulationScale ?? 2600)
+    ) +
+      leadClarity * (audience.airPresenceLeadScale ?? 0.28),
     context,
   );
+  setAudioParam(
+    layer.airBrillianceShelf.gain,
+    -(
+      airAbsorptionDrive * (
+        (audience.airBrillianceAbsorptionScale ?? 5.4) +
+        room.distanceEq * (audience.airBrillianceRoomEqScale ?? 1.8) +
+        audience.extraHighCut * (audience.airBrillianceExtraHighCutScale ?? 3.4)
+      ) +
+      audience.directCutHz / (audience.airBrillianceDirectCutScale ?? 1200)
+    ) +
+      leadClarity * (audience.airBrillianceLeadScale ?? 0.18),
+    context,
+  );
+  setAudioParam(
+    layer.presenceDip.gain,
+    audience.presenceDipDb * (0.72 + layerBlend * (audience.presenceLayerScale ?? 0.42)) +
+      leadClarity * (audience.presenceLeadScale ?? 0.55),
+    context,
+  );
+  setAudioParam(
+    layer.transientDip.gain,
+    audience.transientDipDb * (0.96 + layerBlend * (audience.transientLayerScale ?? 0.28)) +
+      leadClarity * (audience.transientLeadScale ?? 0.72),
+    context,
+  );
+  setAudioParam(layer.lowShelf.gain, -distanceBlend * (3.8 + audience.directCutHz * 0.0012), context);
+  setAudioParam(
+    layer.compressor.threshold,
+    (audience.compressorThresholdBase ?? -15) -
+      suppressionDrive * (audience.compressorThresholdSuppressionScale ?? 0.085) -
+      layerBlend * (audience.compressorThresholdLayerScale ?? 8.5),
+    context,
+  );
+  setAudioParam(
+    layer.compressor.knee,
+    (audience.compressorKneeBase ?? 18) +
+      reverbDrive * (audience.compressorKneeReverbScale ?? 0.17),
+    context,
+  );
+  setAudioParam(
+    layer.compressor.ratio,
+    Math.min(
+      audience.compressorRatioMax ?? 18,
+      (audience.compressorRatioBase ?? 1.8) +
+        suppressionDrive * (audience.compressorRatioSuppressionScale ?? 0.07) +
+        layerBlend * (audience.compressorRatioLayerScale ?? 4.6),
+    ),
+    context,
+  );
+  setAudioParam(
+    layer.compressor.attack,
+    Math.max(
+      audience.compressorAttackMin ?? 0.0015,
+      (audience.compressorAttackBase ?? 0.017) -
+        suppressionDrive * (audience.compressorAttackSuppressionScale ?? 0.00008) -
+        layerBlend * (audience.compressorAttackLayerScale ?? 0.006),
+    ),
+    context,
+  );
+  setAudioParam(
+    layer.compressor.release,
+    Math.min(
+      audience.compressorReleaseMax ?? 0.9,
+      (audience.compressorReleaseBase ?? 0.16) +
+        layerBlend * (audience.compressorReleaseLayerScale ?? 0.22) +
+        suppressionDrive * (audience.compressorReleaseSuppressionScale ?? 0.003) +
+        reverbDrive * (audience.compressorReleaseReverbScale ?? 0.0015),
+    ),
+    context,
+  );
+  setAudioParam(layer.dryGain.gain, adjustedVolume * Math.max(0.06, 1 - distanceBlend * 0.22) * audience.dryGain * directMixLevel, context);
+  setAudioParam(layer.centerAnchorGain.gain, centerImage.anchor, context);
+  setAudioParam(layer.panner.pan, basePan, context);
+  setAudioParam(layer.stereoAnchorGain.gain, 1 - centerImage.anchor, context);
+
+  setAudioParam(layer.earlySend.gain.gain, sendValues.earlyGainValue, context);
   setAudioParam(
     layer.earlySend.preDelay?.delayTime,
-    Math.max(0, (room.earlyPreDelayMs + audience.preDelayMs * 0.24 + layerBlend * 8) * audience.preDelayScale / 1000),
+    getEarlyPreDelaySeconds({ room, audience, layerBlend, distanceBlend }),
     context,
   );
-  setAudioParam(layer.earlySend.highpass?.frequency, Math.max(110, 170 + distanceBlend * 125 + audience.directCutHz * 0.022 + (audience.wetHighpassBoostHz || 0) * 0.35), context);
+  setAudioParam(layer.earlySend.highpass?.frequency, Math.max(110, 170 + distanceBlend * 125 + audience.directCutHz * 0.022 + (audience.wetHighpassBoostHz || 0) * 0.35 + room.wetToneCut * 0.03), context);
   setAudioParam(layer.earlySend.lowpass?.frequency, Math.max(1400, 10400 - distanceBlend * 1800 - audience.wetLowpassCut * 0.42 - room.earlyToneCut), context);
-  setAudioParam(layer.earlySend.lowShelf?.gain, audience.wetLowShelfCutDb || 0, context);
+  setAudioParam(layer.earlySend.lowShelf?.gain, (audience.wetLowShelfCutDb || 0) - Math.min(1.2, room.wetToneCut / 900), context);
+  setAudioParam(layer.earlySend.panner?.pan, clamp(basePan * widthProfile.wet * (0.34 + distanceBlend * 0.08), -0.68, 0.68), context);
 
-  setAudioParam(
-    layer.lateSend.gain.gain,
-    sendValues.lateGainValue,
-    context,
-  );
+  setAudioParam(layer.lateSend.gain.gain, sendValues.lateGainValue, context);
   setAudioParam(
     layer.lateSend.preDelay?.delayTime,
-    Math.max(0, (room.latePreDelayMs + audience.preDelayMs + layerBlend * 18) * audience.preDelayScale / 1000),
+    getLatePreDelaySeconds({ room, audience, layerBlend, distanceBlend }),
     context,
   );
   setAudioParam(layer.lateSend.lowpass?.frequency, Math.max(220, 7600 - distanceBlend * 2500 - audience.wetLowpassCut - room.lateToneCut), context);
-  setAudioParam(layer.lateSend.highpass?.frequency, Math.max(150, 210 + distanceBlend * 170 + audience.directCutHz * 0.045 + (audience.wetHighpassBoostHz || 0)), context);
-  setAudioParam(layer.lateSend.lowShelf?.gain, audience.wetLowShelfCutDb || 0, context);
+  setAudioParam(layer.lateSend.highpass?.frequency, Math.max(140, 200 + distanceBlend * 150 + audience.directCutHz * 0.04 + (audience.wetHighpassBoostHz || 0) * 0.82 + room.wetToneCut * 0.03), context);
+  setAudioParam(layer.lateSend.lowShelf?.gain, (audience.wetLowShelfCutDb || 0) - Math.min(2.2, room.wetToneCut / 520), context);
+  setAudioParam(layer.lateSend.panner?.pan, clamp(basePan * widthProfile.wet * (0.18 + distanceBlend * 0.18), -0.54, 0.54), context);
 
+  setAudioParam(layer.diffusionSend.gain?.gain, sendValues.diffusionGainValue, context);
   setAudioParam(
-    layer.diffusionSend.gain.gain,
-    sendValues.diffusionGainValue,
+    layer.diffusionSend.lowpass?.frequency,
+    Math.max(700, audience.diffusionCutHz - distanceBlend * (audience.diffusionCutDistanceScale ?? 420) - layerBlend * (audience.diffusionCutLayerScale ?? 320)),
     context,
   );
-  setAudioParam(layer.diffusionSend.lowpass?.frequency, Math.max(700, audience.diffusionCutHz - distanceBlend * 420 - layerBlend * 320), context);
-  setAudioParam(layer.diffusionSend.highpass?.frequency, Math.max(130, 170 + distanceBlend * 85 + audience.directCutHz * 0.028 + (audience.wetHighpassBoostHz || 0) * 0.6), context);
+  setAudioParam(
+    layer.diffusionSend.highpass?.frequency,
+    Math.max(
+      130,
+      (audience.diffusionHighpassBaseHz ?? 170) +
+        distanceBlend * (audience.diffusionHighpassDistanceScale ?? 85) +
+        audience.directCutHz * (audience.diffusionHighpassDirectScale ?? 0.028) +
+        (audience.wetHighpassBoostHz || 0) * (audience.diffusionHighpassWetBoostScale ?? 0.6),
+    ),
+    context,
+  );
   setAudioParam(layer.diffusionSend.lowShelf?.gain, (audience.wetLowShelfCutDb || 0) * 0.85, context);
+  setAudioParam(
+    layer.diffusionSend.panner?.pan,
+    clamp(
+      basePan * widthProfile.wet * ((audience.diffusionPanBase ?? 0.22) + distanceBlend * (audience.diffusionPanDistanceScale ?? 0.12)),
+      -0.62,
+      0.62,
+    ),
+    context,
+  );
 
+  setAudioParam(layer.smearSend.gain?.gain, sendValues.smearGainValue, context);
   setAudioParam(
-    layer.smearSend.gain.gain,
-    sendValues.smearGainValue,
+    layer.smearSend.preDelay?.delayTime,
+    Math.max(
+      0,
+      (layerBlend * (audience.smearPreDelayLayerMs ?? 10) +
+        safe.delayMs * audience.delayScale * (room.layerDelayScale ?? 1) * (audience.smearPreDelayDelayScale ?? 0.012)) / 1000,
+    ),
     context,
   );
-  setAudioParam(layer.smearSend.preDelay?.delayTime, Math.max(0, (layerBlend * 10 + safe.delayMs * audience.delayScale * 0.012) / 1000), context);
+  setAudioParam(
+    layer.smearSend.panner?.pan,
+    clamp(
+      basePan * widthProfile.wet * ((audience.smearPanBase ?? 0.32) + distanceBlend * (audience.smearPanDistanceScale ?? 0.08)),
+      -0.84,
+      0.84,
+    ),
+    context,
+  );
 
+  setAudioParam(layer.blurSend.gain?.gain, sendValues.blurGainValue, context);
   setAudioParam(
-    layer.blurSend.gain.gain,
-    sendValues.blurGainValue,
+    layer.blurSend.panner?.pan,
+    clamp(basePan * widthProfile.wet * (audience.blurPanScale ?? 0.2), -0.72, 0.72),
     context,
   );
-  setAudioParam(
-    layer.reflectionSend.gain.gain,
-    sendValues.reflectionGainValue,
-    context,
-  );
-  setAudioParam(layer.reflectionSend.preDelay?.delayTime, Math.max(0, (layerBlend * 12 + index * 2.5 + safe.delayMs * audience.delayScale * 0.02) / 1000), context);
+
+  setAudioParam(layer.reflectionSend.gain?.gain, sendValues.reflectionGainValue, context);
+  setAudioParam(layer.reflectionSend.preDelay?.delayTime, Math.max(0, (layerBlend * 12 + index * 2.5 + safe.delayMs * audience.delayScale * (room.layerDelayScale ?? 1) * 0.02) / 1000), context);
+  setAudioParam(layer.reflectionSend.panner?.pan, getReflectionPan(basePan, index, room.reflectionWidth * widthProfile.reflection), context);
+}
+
+export function updateLayerAdaptiveWetness({
+  context,
+  layer,
+  room,
+  audience,
+  audienceTrack,
+  safe,
+  trackCount,
+  complexity,
+  reflectionPattern,
+  layerCache,
+  layerVariationCache,
+  adaptiveWetCacheEntry = null,
+  adaptiveWetMix = 1,
+}) {
+  let earlyGainValue = 0;
+  let lateGainValue = 0;
+  let reflectionGainValue = 0;
+
+  if (adaptiveWetCacheEntry) {
+    earlyGainValue = Math.min(
+      0.26,
+      adaptiveWetCacheEntry.earlyWetFactor * adaptiveWetMix * clamp(0.94 + (adaptiveWetMix - 1) * 0.45, 0.9, 1.04),
+    );
+    lateGainValue = Math.min(0.34, adaptiveWetCacheEntry.lateWetFactor * adaptiveWetMix);
+    reflectionGainValue =
+      adaptiveWetCacheEntry.reflectionWetFactor * clamp(0.92 + (adaptiveWetMix - 1) * 0.6, 0.88, 1.05);
+  } else {
+    const index = layer.index;
+    const layerState = computeLayerState({
+      room,
+      audience,
+      audienceTrack,
+      safe,
+      adaptiveWetMix,
+      trackCount,
+      index,
+      complexity,
+      reflectionPattern,
+      layerCache,
+      layerVariationCache,
+    });
+    const sendValues = computeSendValues({
+      room,
+      audience,
+      safe,
+      trackCount,
+      index,
+      complexity,
+      layerState,
+    });
+    earlyGainValue = sendValues.earlyGainValue;
+    lateGainValue = sendValues.lateGainValue;
+    reflectionGainValue = sendValues.reflectionGainValue;
+  }
+
+  setAudioParam(layer.earlySend.gain.gain, earlyGainValue, context);
+  setAudioParam(layer.lateSend.gain.gain, lateGainValue, context);
+  setAudioParam(layer.reflectionSend.gain?.gain, reflectionGainValue, context);
 }

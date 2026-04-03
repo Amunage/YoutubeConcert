@@ -1,7 +1,14 @@
-import { clamp, getAudiencePresetConfig, getRoomPresetConfig, withDefaults } from "../../lib/presets.js";
+import { clamp, getAudiencePositionConfig, getRoomPresetConfig, withDefaults } from "../../lib/presets.js";
 import { ensureSharedEffectBus, syncSharedEffectBusUsage } from "./buses.js";
 import { createDisconnectCleanup, getAuxiliaryTapCount, getComplexityProfile, shrinkPattern } from "./effects.js";
-import { buildLayerChain, buildLayerComputationCache, buildLayerVariationCache, updateLayerChain } from "./layers.js";
+import {
+  buildLayerAdaptiveWetCache,
+  buildLayerChain,
+  buildLayerComputationCache,
+  buildLayerVariationCache,
+  updateLayerAdaptiveWetness,
+  updateLayerChain,
+} from "./layers.js";
 import { configureMasterOutput, updateMasterOutput } from "./output.js";
 
 function createDetachedSendTarget(context, nodes) {
@@ -11,7 +18,7 @@ function createDetachedSendTarget(context, nodes) {
 }
 
 function buildAudienceSettings(safe) {
-  const audienceBase = getAudiencePresetConfig(safe.audiencePreset);
+  const audienceBase = getAudiencePositionConfig(safe.audiencePosition);
   return {
     ...audienceBase,
     directMixTrim: audienceBase.directMixTrim * clamp(safe.directMixTrim, 0, 200) / 100,
@@ -55,9 +62,20 @@ export function createLiveConcertGraph(context, settings) {
   const room = getRoomPresetConfig(safe.roomPreset);
   const audience = buildAudienceSettings(safe);
   const trackCount = clamp(safe.cloneCount, 1, 8);
-  const outputLevel = 0.78;
+  const outputLevel = 0.50;
   const originalMix = 0.18;
   const complexity = getComplexityProfile(trackCount, safe.roomPreset, safe.audiencePreset, safe.reverbIntensity);
+  const lateBusVariants = [];
+  if (safe.experimentalSubtleSpaceResponse && (safe.roomPreset === "arena" || safe.roomPreset === "stadium")) {
+    lateBusVariants.push("subtle-space-response");
+  }
+  if (safe.experimentalCrowdReaction && (safe.roomPreset === "arena" || safe.roomPreset === "stadium")) {
+    lateBusVariants.push("crowd-reaction");
+  }
+  if (safe.experimentalLargeSpaceModulation && (safe.roomPreset === "arena" || safe.roomPreset === "stadium")) {
+    lateBusVariants.push("large-space-micro-modulation");
+  }
+  const lateBusVariantKey = lateBusVariants.length ? lateBusVariants.join("+") : "base";
   const localNodes = [];
   const layerCache = buildLayerComputationCache(
     trackCount,
@@ -65,20 +83,25 @@ export function createLiveConcertGraph(context, settings) {
     safe.volumeDecay,
     safe.reverbIntensity,
     safe.peakSuppression,
-    safe.audiencePreset,
+    safe.audiencePosition,
+    room,
   );
   const layerVariationCache = buildLayerVariationCache("live", trackCount, safe.roomPreset, safe.audiencePreset);
 
   const input = context.createGain();
   const originalGain = context.createGain();
   const processedInput = context.createGain();
+  const densityTap = context.createAnalyser();
   const mix = context.createGain();
-  localNodes.push(input, originalGain, processedInput, mix);
+  densityTap.fftSize = 512;
+  densityTap.smoothingTimeConstant = 0.82;
+  localNodes.push(input, originalGain, processedInput, densityTap, mix);
 
   originalGain.gain.value = originalMix;
   input.connect(originalGain);
   originalGain.connect(mix);
   input.connect(processedInput);
+  input.connect(densityTap);
 
   const diffusionPattern = shrinkPattern(
     audience.diffusionTimesMs,
@@ -96,10 +119,28 @@ export function createLiveConcertGraph(context, settings) {
     room.earlyReflections,
     getAuxiliaryTapCount(room.earlyReflections.length, trackCount, 0.5, 1, complexity.tapDensityScale),
   );
+  const adaptiveWetCache = buildLayerAdaptiveWetCache({
+    room,
+    audience,
+    safe,
+    trackCount,
+    complexity,
+    reflectionPattern,
+    layerCache,
+    layerVariationCache,
+  });
 
   const activeKinds = ["early", "late"];
   const earlyBus = ensureSharedEffectBus("early", { preset: room, roomPreset: safe.roomPreset }, context);
-  const lateBus = ensureSharedEffectBus("late", { preset: room, roomPreset: safe.roomPreset }, context);
+  const lateBus = ensureSharedEffectBus("late", {
+    preset: room,
+    roomPreset: safe.roomPreset,
+    audiencePreset: safe.audiencePreset,
+    variantKey: lateBusVariantKey,
+    experimentalLargeSpaceModulation: safe.experimentalLargeSpaceModulation,
+    experimentalSubtleSpaceResponse: safe.experimentalSubtleSpaceResponse,
+    experimentalCrowdReaction: safe.experimentalCrowdReaction,
+  }, context);
 
   let diffusionBus = null;
   if (complexity.allowDiffusion && safe.diffusionAmount > 0 && diffusionPattern.length) {
@@ -154,10 +195,10 @@ export function createLiveConcertGraph(context, settings) {
 
   const earlyInput = earlyBus?.input ?? createDetachedSendTarget(context, localNodes).input;
   const lateInput = lateBus?.input ?? createDetachedSendTarget(context, localNodes).input;
-  const diffusionInput = diffusionBus?.input ?? createDetachedSendTarget(context, localNodes).input;
-  const smearInput = smearBus?.input ?? createDetachedSendTarget(context, localNodes).input;
-  const blurInput = blurBus?.input ?? createDetachedSendTarget(context, localNodes).input;
-  const reflectionInput = reflectionBus?.input ?? createDetachedSendTarget(context, localNodes).input;
+  const diffusionInput = diffusionBus?.input ?? null;
+  const smearInput = smearBus?.input ?? null;
+  const blurInput = blurBus?.input ?? null;
+  const reflectionInput = reflectionBus?.input ?? null;
 
   const layerNodes = [];
   for (let index = 0; index < trackCount; index += 1) {
@@ -181,6 +222,7 @@ export function createLiveConcertGraph(context, settings) {
       reflectionPattern,
       layerCache,
       layerVariationCache,
+      adaptiveWetMix: 1,
     });
     layerNodes.push(layer);
     localNodes.push(...(layer.cleanupNodes || []));
@@ -200,7 +242,12 @@ export function createLiveConcertGraph(context, settings) {
     reflectionPattern,
     layerCache,
     layerVariationCache,
+    adaptiveWetCache,
+    adaptiveWetMix: 1,
     settings: safe,
+    densityTap,
+    densityTimeData: new Float32Array(densityTap.fftSize),
+    densityFrequencyData: new Float32Array(densityTap.frequencyBinCount),
     hasDiffusionBus: Boolean(diffusionBus),
     hasSmearBus: Boolean(smearBus),
     hasBlurBus: Boolean(blurBus),
@@ -221,8 +268,19 @@ export function updateLiveConcertGraph(context, graph, settings) {
     safe.volumeDecay,
     safe.reverbIntensity,
     safe.peakSuppression,
-    safe.audiencePreset,
+    safe.audiencePosition,
+    room,
   );
+  const adaptiveWetCache = buildLayerAdaptiveWetCache({
+    room,
+    audience,
+    safe,
+    trackCount,
+    complexity,
+    reflectionPattern: graph.reflectionPattern,
+    layerCache,
+    layerVariationCache: graph.layerVariationCache,
+  });
 
   graph.layerNodes.forEach((layer, index) => {
     updateLayerChain({
@@ -237,11 +295,12 @@ export function updateLiveConcertGraph(context, graph, settings) {
       reflectionPattern: graph.reflectionPattern,
       layerCache,
       layerVariationCache: graph.layerVariationCache,
+      adaptiveWetMix: graph.adaptiveWetMix || 1,
     });
   });
 
   updateMasterOutput({
-    outputLevel: 0.78,
+    outputLevel: 0.50,
     peakSuppression: safe.peakSuppression,
     trackCount,
     context,
@@ -251,6 +310,31 @@ export function updateLiveConcertGraph(context, graph, settings) {
   graph.audience = audience;
   graph.complexity = complexity;
   graph.layerCache = layerCache;
+  graph.adaptiveWetCache = adaptiveWetCache;
   graph.settings = safe;
   graph.trackCount = trackCount;
+}
+
+export function updateLiveConcertAdaptiveWetness(context, graph, adaptiveWetMix) {
+  if (!graph?.layerNodes?.length) {
+    return;
+  }
+  graph.adaptiveWetMix = clamp(adaptiveWetMix, 0.84, 1.05);
+  graph.layerNodes.forEach((layer, index) => {
+    updateLayerAdaptiveWetness({
+      context,
+      layer,
+      room: graph.room,
+      audience: graph.audience,
+      audienceTrack: graph.layerCache.audienceTracks[index],
+      safe: graph.settings,
+      trackCount: graph.trackCount,
+      complexity: graph.complexity,
+      reflectionPattern: graph.reflectionPattern,
+      layerCache: graph.layerCache,
+      layerVariationCache: graph.layerVariationCache,
+      adaptiveWetCacheEntry: graph.adaptiveWetCache?.[index] ?? null,
+      adaptiveWetMix: graph.adaptiveWetMix,
+    });
+  });
 }

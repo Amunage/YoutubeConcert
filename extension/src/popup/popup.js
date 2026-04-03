@@ -1,13 +1,18 @@
-import { DEFAULT_SETTINGS, withDefaults } from "../lib/presets.js";
+import { DEFAULT_SETTINGS, getAudienceLabelForPosition, withDefaults } from "../lib/presets.js";
 
 const controls = {
   toggleButton: document.getElementById("toggleButton"),
   statusText: document.getElementById("statusText"),
   tabMeta: document.getElementById("tabMeta"),
+  tabMetaTrack: document.getElementById("tabMetaTrack"),
+  tabMetaText: document.getElementById("tabMetaText"),
+  tabMetaTextClone: document.getElementById("tabMetaTextClone"),
   appVersion: document.getElementById("appVersion"),
   advancedOptions: document.getElementById("advancedOptions"),
+  resetAdvancedButton: document.getElementById("resetAdvancedButton"),
   roomPreset: document.getElementById("roomPreset"),
-  audiencePreset: document.getElementById("audiencePreset"),
+  audiencePosition: document.getElementById("audiencePosition"),
+  audiencePositionValue: document.getElementById("audiencePositionValue"),
   cloneCount: document.getElementById("cloneCount"),
   cloneCountValue: document.getElementById("cloneCountValue"),
   delayMs: document.getElementById("delayMs"),
@@ -34,6 +39,9 @@ const controls = {
   reflectionSpacingValue: document.getElementById("reflectionSpacingValue"),
   dynamicWetTrimStrength: document.getElementById("dynamicWetTrimStrength"),
   dynamicWetTrimStrengthValue: document.getElementById("dynamicWetTrimStrengthValue"),
+  experimentalLargeSpaceModulation: document.getElementById("experimentalLargeSpaceModulation"),
+  experimentalSubtleSpaceResponse: document.getElementById("experimentalSubtleSpaceResponse"),
+  experimentalCrowdReaction: document.getElementById("experimentalCrowdReaction"),
 };
 
 controls.appVersion.textContent = `v${chrome.runtime.getManifest().version}`;
@@ -44,7 +52,7 @@ const SETTINGS_DEBOUNCE_MS = 140;
 
 const settingFields = [
   "roomPreset",
-  "audiencePreset",
+  "audiencePosition",
   "cloneCount",
   "delayMs",
   "ensembleVolume",
@@ -58,6 +66,26 @@ const settingFields = [
   "tailGainScale",
   "reflectionSpacing",
   "dynamicWetTrimStrength",
+  "experimentalLargeSpaceModulation",
+  "experimentalSubtleSpaceResponse",
+  "experimentalCrowdReaction",
+];
+
+const advancedSettingFields = [
+  "ensembleVolume",
+  "volumeDecay",
+  "reverbIntensity",
+  "diffusionAmount",
+  "auxiliaryAmount",
+  "peakSuppression",
+  "directMixTrim",
+  "preDelayScale",
+  "tailGainScale",
+  "reflectionSpacing",
+  "dynamicWetTrimStrength",
+  "experimentalLargeSpaceModulation",
+  "experimentalSubtleSpaceResponse",
+  "experimentalCrowdReaction",
 ];
 
 let currentState = {
@@ -72,10 +100,38 @@ let currentState = {
 let pendingSettingsTimer = null;
 let pendingSettingsPromise = Promise.resolve();
 
+function updateTabMeta() {
+  const title = (currentState.tabTitle || "").trim();
+  controls.tabMetaText.textContent = title;
+  controls.tabMetaTextClone.textContent = title;
+  controls.tabMeta.classList.toggle("is-empty", !title);
+  controls.tabMeta.classList.remove("is-scrolling");
+  controls.tabMeta.style.removeProperty("--tab-scroll-duration");
+  controls.tabMeta.style.removeProperty("--tab-scroll-distance");
+
+  if (!title) {
+    return;
+  }
+
+  requestAnimationFrame(() => {
+    const shouldScroll = controls.tabMetaText.scrollWidth > controls.tabMeta.clientWidth;
+    if (!shouldScroll) {
+      return;
+    }
+
+    const trackGap = 60;
+    const scrollDistance = controls.tabMetaText.scrollWidth + trackGap;
+    const durationSeconds = Math.max(8, Math.ceil(scrollDistance / 28));
+    controls.tabMeta.style.setProperty("--tab-scroll-distance", `${scrollDistance}px`);
+    controls.tabMeta.style.setProperty("--tab-scroll-duration", `${durationSeconds}s`);
+    controls.tabMeta.classList.add("is-scrolling");
+  });
+}
+
 function getSettingsFromForm() {
   return withDefaults({
     roomPreset: controls.roomPreset.value,
-    audiencePreset: controls.audiencePreset.value,
+    audiencePosition: Number(controls.audiencePosition.value),
     cloneCount: Number(controls.cloneCount.value),
     delayMs: Number(controls.delayMs.value),
     ensembleVolume: Number(controls.ensembleVolume.value),
@@ -89,13 +145,16 @@ function getSettingsFromForm() {
     tailGainScale: Number(controls.tailGainScale.value),
     reflectionSpacing: Number(controls.reflectionSpacing.value),
     dynamicWetTrimStrength: Number(controls.dynamicWetTrimStrength.value),
+    experimentalLargeSpaceModulation: controls.experimentalLargeSpaceModulation.checked,
+    experimentalSubtleSpaceResponse: controls.experimentalSubtleSpaceResponse.checked,
+    experimentalCrowdReaction: controls.experimentalCrowdReaction.checked,
   });
 }
 
 function applySettingsToForm(settings = DEFAULT_SETTINGS) {
   const safe = withDefaults(settings);
   controls.roomPreset.value = safe.roomPreset;
-  controls.audiencePreset.value = safe.audiencePreset;
+  controls.audiencePosition.value = safe.audiencePosition;
   controls.cloneCount.value = safe.cloneCount;
   controls.delayMs.value = safe.delayMs;
   controls.ensembleVolume.value = safe.ensembleVolume;
@@ -109,10 +168,27 @@ function applySettingsToForm(settings = DEFAULT_SETTINGS) {
   controls.tailGainScale.value = safe.tailGainScale;
   controls.reflectionSpacing.value = safe.reflectionSpacing;
   controls.dynamicWetTrimStrength.value = safe.dynamicWetTrimStrength;
+  controls.experimentalLargeSpaceModulation.checked = Boolean(safe.experimentalLargeSpaceModulation);
+  controls.experimentalSubtleSpaceResponse.checked = Boolean(safe.experimentalSubtleSpaceResponse);
+  controls.experimentalCrowdReaction.checked = Boolean(safe.experimentalCrowdReaction);
+  syncValueLabels();
+}
+
+function applyAdvancedDefaultsToForm() {
+  advancedSettingFields.forEach((fieldName) => {
+    const element = controls[fieldName];
+    const defaultValue = DEFAULT_SETTINGS[fieldName];
+    if (element.type === "checkbox") {
+      element.checked = Boolean(defaultValue);
+      return;
+    }
+    element.value = defaultValue;
+  });
   syncValueLabels();
 }
 
 function syncValueLabels() {
+  controls.audiencePositionValue.textContent = `${controls.audiencePosition.value} - ${getAudienceLabelForPosition(Number(controls.audiencePosition.value))}`;
   controls.cloneCountValue.textContent = `${controls.cloneCount.value}`;
   controls.delayMsValue.textContent = `${controls.delayMs.value}ms`;
   controls.ensembleVolumeValue.textContent = `${controls.ensembleVolume.value}%`;
@@ -131,9 +207,9 @@ function syncValueLabels() {
 function renderState() {
   const running = Boolean(currentState.running);
   controls.statusText.textContent = running ? "Live processing" : currentState.lastError || "Idle";
-  controls.toggleButton.textContent = running ? "Stop" : "Start Current Tab";
+  controls.toggleButton.textContent = running ? "Stop" : "Start";
   controls.toggleButton.classList.toggle("is-running", running);
-  controls.tabMeta.textContent = currentState.tabTitle ? `${currentState.tabTitle}` : "";
+  updateTabMeta();
 }
 
 async function refreshState() {
@@ -214,6 +290,10 @@ async function toggleCapture() {
 }
 
 controls.toggleButton.addEventListener("click", toggleCapture);
+controls.resetAdvancedButton.addEventListener("click", () => {
+  applyAdvancedDefaultsToForm();
+  flushQueuedSettings().catch(() => {});
+});
 controls.advancedOptions.addEventListener("toggle", () => {
   persistAdvancedOpen().catch(() => {});
 });

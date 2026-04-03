@@ -3,6 +3,7 @@ import { clamp } from "../../lib/presets.js";
 export { clamp };
 
 const reverbBufferCache = new WeakMap();
+const reverbBufferDataCache = new Map();
 
 export function createDisconnectCleanup(nodes = []) {
   let cleanedUp = false;
@@ -70,7 +71,13 @@ export function getTrackEffectStrength(basePercent, layerIndex) {
 }
 
 export function getComplexityProfile(trackCount, roomPreset, audiencePreset, reverbDrive) {
-  const roomLoad = roomPreset === "cathedral" ? 0.8 : roomPreset === "hall" ? 0.42 : roomPreset === "stage" ? 0.16 : 0;
+  const roomLoad = roomPreset === "stadium"
+    ? 0.96
+    : roomPreset === "arena"
+      ? 0.56
+      : roomPreset === "theater"
+        ? 0.22
+        : 0.04;
   const audienceLoad = audiencePreset === "outside" ? 0.8 : audiencePreset === "rear" ? 0.36 : audiencePreset === "mid" ? 0.18 : 0;
   const cloneLoad = Math.max(0, trackCount - 1) / 5.5;
   const wetLoad = clamp(reverbDrive, 0, 100) / 100;
@@ -134,10 +141,66 @@ function getContextCache(context) {
   return reverbBufferCache.get(context);
 }
 
+function createImpulseBufferFromCache(context, cacheKey, cachedData) {
+  const impulse = context.createBuffer(cachedData.channels.length, cachedData.length, cachedData.sampleRate);
+  for (let channel = 0; channel < cachedData.channels.length; channel += 1) {
+    impulse.copyToChannel(cachedData.channels[channel], channel);
+  }
+  const contextCache = getContextCache(context);
+  contextCache.set(cacheKey, impulse);
+  return impulse;
+}
+
+function storeImpulseBufferData(cacheKey, impulse) {
+  const channels = [];
+  for (let channel = 0; channel < impulse.numberOfChannels; channel += 1) {
+    channels.push(new Float32Array(impulse.getChannelData(channel)));
+  }
+  reverbBufferDataCache.set(cacheKey, {
+    sampleRate: impulse.sampleRate,
+    length: impulse.length,
+    channels,
+  });
+}
+
+function getImpulseProfile(preset, stage) {
+  const roomScale = clamp(((preset?.lateReverbSeconds || preset?.reverbSeconds || 1) - 0.3) / 6.2, 0, 1.1);
+  const width = clamp(preset?.reflectionWidth || 0.2, 0.1, 0.7);
+  const wetToneCut = clamp(preset?.wetToneCut || 0, 0, 1400);
+
+  if (stage === "early") {
+    return {
+      stereoOffsetScale: Math.max(0.18, width * (1.75 + roomScale * 0.65)),
+      tapGainBase: 0.72 - roomScale * 0.1,
+      tapGainSlope: 0.08 + roomScale * 0.02,
+      smearBaseSeconds: 0.0017 + roomScale * 0.0013,
+      smearStepSeconds: 0.00055 + roomScale * 0.00024,
+      smearPowerBase: 1.65 + roomScale * 0.4,
+      washAmount: 0.03 + roomScale * 0.025,
+    };
+  }
+
+  return {
+    fadeInScale: 0.12 + roomScale * 0.08,
+    bloomScale: 0.24 + roomScale * 0.16,
+    sparseTapCount: Math.max(3, Math.min(10, Math.round(3 + roomScale * 6.5))),
+    tapSpreadBase: 0.19 + roomScale * 0.07,
+    tapSmearBaseSeconds: 0.0032 + roomScale * 0.0023,
+    tapSmearStepSeconds: 0.00055 + roomScale * 0.00028,
+    lateGrainBase: 0.38 + roomScale * 0.2,
+    diffuseGrainBase: 0.11 + roomScale * 0.08,
+    shimmerSkew: 0.9 + roomScale * 0.18 + wetToneCut / 7000,
+  };
+}
+
 export function getConvolverBuffer(context, preset, stage) {
   const cache = getContextCache(context);
   const cacheKey = `${preset.label}:${stage}:${context.sampleRate}`;
   if (cache.has(cacheKey)) return cache.get(cacheKey);
+  const cachedData = reverbBufferDataCache.get(cacheKey);
+  if (cachedData) {
+    return createImpulseBufferFromCache(context, cacheKey, cachedData);
+  }
 
   const sampleRate = context.sampleRate;
   const reverbSeconds = stage === "early" ? preset.earlyReverbSeconds : preset.lateReverbSeconds;
@@ -145,12 +208,13 @@ export function getConvolverBuffer(context, preset, stage) {
   const length = Math.max(1, Math.floor(sampleRate * reverbSeconds));
   const impulse = context.createBuffer(2, length, sampleRate);
   const random = seeded(hashSeed(cacheKey));
+  const profile = getImpulseProfile(preset, stage);
 
   for (let channel = 0; channel < 2; channel += 1) {
     const data = impulse.getChannelData(channel);
     if (stage === "early") {
       const tapPattern = preset.earlyReflections || [];
-      const stereoOffsetScale = Math.max(0.2, preset.reflectionWidth * 2.1);
+      const stereoOffsetScale = profile.stereoOffsetScale;
       for (let tapIndex = 0; tapIndex < tapPattern.length; tapIndex += 1) {
         const reflection = tapPattern[tapIndex] || {};
         const baseMs = Math.max(0, Number(reflection.timeMs) || 0);
@@ -162,33 +226,33 @@ export function getConvolverBuffer(context, preset, stage) {
         const tapSample = Math.max(0, Math.min(length - 1, Math.floor(((baseMs + stereoOffsetMs) / 1000) * sampleRate)));
         const channelPanWeight = channel === 0 ? 1 - pan * 0.55 : 1 + pan * 0.55;
         const toneDamp = Math.max(0.35, Math.min(1, filterHz / 8200));
-        const tapGain = Math.max(0.08, 0.68 - tapIndex * 0.09) * gainScale * toneDamp * channelPanWeight * (0.9 + random() * 0.18);
+        const tapGain = Math.max(0.08, profile.tapGainBase - tapIndex * profile.tapGainSlope) * gainScale * toneDamp * channelPanWeight * (0.9 + random() * 0.18);
         data[tapSample] += tapGain;
 
-        const smearLength = Math.max(10, Math.floor(sampleRate * (0.0024 + tapIndex * 0.0008 + (8200 - filterHz) / 1000000)));
+        const smearLength = Math.max(10, Math.floor(sampleRate * (profile.smearBaseSeconds + tapIndex * profile.smearStepSeconds + (8200 - filterHz) / 1000000)));
         for (let smearIndex = 1; smearIndex < smearLength && tapSample + smearIndex < length; smearIndex += 1) {
-          const smearDecay = Math.pow(1 - smearIndex / smearLength, 1.8 + tapIndex * 0.16);
+          const smearDecay = Math.pow(1 - smearIndex / smearLength, profile.smearPowerBase + tapIndex * 0.16);
           const smearGrain = (random() * 2 - 1) * 0.34 * toneDamp;
           data[tapSample + smearIndex] += smearGrain * tapGain * smearDecay;
         }
       }
       for (let index = 0; index < length; index += 1) {
         const washDecay = Math.pow(1 - index / length, Math.max(1.5, decayPower - 0.5));
-        data[index] += (random() * 2 - 1) * 0.045 * washDecay;
+        data[index] += (random() * 2 - 1) * profile.washAmount * washDecay;
       }
     } else {
-      const fadeInSamples = Math.max(1, Math.floor(sampleRate * Math.min(0.3, Math.max(0.1, reverbSeconds * 0.16))));
-      const bloomSamples = Math.max(fadeInSamples + 1, Math.floor(sampleRate * Math.min(0.7, Math.max(0.2, reverbSeconds * 0.34))));
-      const sparseTapCount = Math.max(3, Math.min(9, Math.round(reverbSeconds * 3.2)));
+      const fadeInSamples = Math.max(1, Math.floor(sampleRate * Math.min(0.34, Math.max(0.08, reverbSeconds * profile.fadeInScale))));
+      const bloomSamples = Math.max(fadeInSamples + 1, Math.floor(sampleRate * Math.min(0.95, Math.max(0.18, reverbSeconds * profile.bloomScale))));
+      const sparseTapCount = profile.sparseTapCount;
       for (let tapIndex = 0; tapIndex < sparseTapCount; tapIndex += 1) {
         const tapProgress = (tapIndex + 1) / (sparseTapCount + 1);
-        const tapTimeSeconds = 0.012 + tapProgress * Math.min(0.22, reverbSeconds * 0.18);
+        const tapTimeSeconds = 0.01 + tapProgress * Math.min(0.28, reverbSeconds * profile.tapSpreadBase);
         const tapSample = Math.max(0, Math.min(length - 1, Math.floor(tapTimeSeconds * sampleRate)));
         const tapDecay = Math.pow(1 - tapSample / length, Math.max(1.1, decayPower * 0.82));
         const tapGain = (0.24 - tapIndex * 0.018) * tapDecay * (0.88 + random() * 0.2);
         const tapSpread = channel === 0 ? 1 - tapIndex * 0.015 : 0.94 + tapIndex * 0.012;
         data[tapSample] += tapGain * tapSpread;
-        const tapSmearLength = Math.max(18, Math.floor(sampleRate * (0.004 + tapIndex * 0.0007)));
+        const tapSmearLength = Math.max(18, Math.floor(sampleRate * (profile.tapSmearBaseSeconds + tapIndex * profile.tapSmearStepSeconds)));
         for (let smearIndex = 1; smearIndex < tapSmearLength && tapSample + smearIndex < length; smearIndex += 1) {
           const smearDecay = Math.pow(1 - smearIndex / tapSmearLength, 1.5 + tapIndex * 0.08);
           const smearGain = ((random() * 2 - 1) * 0.12 + 0.04) * tapGain;
@@ -197,18 +261,19 @@ export function getConvolverBuffer(context, preset, stage) {
       }
       for (let index = 0; index < length; index += 1) {
         const decay = Math.pow(1 - index / length, decayPower);
-        const shimmer = channel === 0 ? 1 - index / length : Math.pow(1 - index / length, 0.92);
+        const shimmer = channel === 0 ? 1 - index / length : Math.pow(1 - index / length, profile.shimmerSkew);
         const onsetLinear = index < fadeInSamples ? index / fadeInSamples : 1;
         const onset = Math.pow(onsetLinear, 1.85);
         const densityProgress = index < bloomSamples ? index / bloomSamples : 1;
         const density = 0.24 + Math.pow(densityProgress, 1.35) * 0.76;
-        const lateGrain = (random() * 2 - 1) * (0.5 + density * 0.28);
-        const diffuseGrain = (random() * 2 - 1) * 0.16 * density;
+        const lateGrain = (random() * 2 - 1) * (profile.lateGrainBase + density * 0.22);
+        const diffuseGrain = (random() * 2 - 1) * profile.diffuseGrainBase * density;
         data[index] += (lateGrain + diffuseGrain) * decay * shimmer * onset * density;
       }
     }
   }
 
   cache.set(cacheKey, impulse);
+  storeImpulseBufferData(cacheKey, impulse);
   return impulse;
 }
