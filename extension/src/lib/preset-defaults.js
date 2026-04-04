@@ -1,5 +1,4 @@
 export const DEFAULT_SETTINGS = {
-  enabled: true,
   roomPreset: "arena",
   audiencePosition: 4,
   audiencePreset: "mid",

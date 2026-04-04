@@ -3,6 +3,7 @@ import { DEFAULT_SETTINGS, getAudienceLabelForPosition, withDefaults } from "../
 const controls = {
   toggleButton: document.getElementById("toggleButton"),
   statusText: document.getElementById("statusText"),
+  hoverHint: document.getElementById("hoverHint"),
   tabMeta: document.getElementById("tabMeta"),
   tabMetaTrack: document.getElementById("tabMetaTrack"),
   tabMetaText: document.getElementById("tabMetaText"),
@@ -51,6 +52,9 @@ const ADVANCED_OPEN_KEY = "concertAdvancedOpen";
 const SETTINGS_DEBOUNCE_MS = 140;
 const STATUS_RESET_DELAY_MS = 4200;
 const INITIAL_STATE_RETRY_DELAY_MS = 180;
+const HOVER_HINT_DELAY_MS = 480;
+const HOVER_HINT_OFFSET_X = 14;
+const HOVER_HINT_OFFSET_Y = 12;
 
 const settingFields = [
   "roomPreset",
@@ -73,6 +77,13 @@ const settingFields = [
   "experimentalCrowdReaction",
 ];
 
+const basicSettingFields = [
+  "roomPreset",
+  "audiencePosition",
+  "cloneCount",
+  "delayMs",
+];
+
 const advancedSettingFields = [
   "ensembleVolume",
   "volumeDecay",
@@ -90,6 +101,27 @@ const advancedSettingFields = [
   "experimentalCrowdReaction",
 ];
 
+const hoverHintCopy = {
+  roomPreset: "Chooses the base venue model, changing room size, tail behavior, reflection timing, and overall space character.",
+  audiencePosition: "Moves the listener from near-front to farther-back or outside perspectives, changing distance, width, and wet balance.",
+  cloneCount: "Sets how many layered support voices are generated around the source to create ensemble width and venue spread.",
+  delayMs: "Controls the base layer offset timing, affecting how tightly or loosely the live ensemble image opens up.",
+  ensembleVolume: "Sets the base loudness of the duplicated support layers before room and distance shaping are applied.",
+  volumeDecay: "Controls how quickly each additional layer loses level as the stack moves away from the lead layer.",
+  reverbIntensity: "Drives how strongly the wet buses are fed, affecting overall venue tail weight and depth.",
+  diffusionAmount: "Controls how much the diffusion bus softens and spreads the reverb field into a denser wash.",
+  auxiliaryAmount: "Scales the extra smear, blur, and reflection sends that create live-air and side-wall texture.",
+  peakSuppression: "Tightens the master dynamics chain so dense mixes stay controlled and less spiky.",
+  directMixTrim: "Adjusts how present the dry direct signal remains against the venue processing.",
+  preDelayScale: "Globally scales the early and late pre-delay timing so the room feels nearer or farther away.",
+  tailGainScale: "Raises or lowers the overall reverb tail energy after the room preset is chosen.",
+  reflectionSpacing: "Widens or compresses the timing gap between reflection taps for a tighter or larger wall feel.",
+  dynamicWetTrimStrength: "Changes how aggressively the adaptive wet system pulls reverb back when the source gets dense.",
+  experimentalLargeSpaceModulation: "Adds subtle motion to large-room tails so arena and stadium presets feel less static.",
+  experimentalSubtleSpaceResponse: "Adds a faint bloom behind the late tail to make large spaces feel less empty.",
+  experimentalCrowdReaction: "Adds a low-level crowd-air bed behind the reverb for a stronger live venue impression.",
+};
+
 let currentState = {
   running: false,
   tabId: null,
@@ -104,6 +136,8 @@ let pendingSettingsPromise = Promise.resolve();
 let statusResetTimer = null;
 let transientStatusMessage = "";
 let transientStatusIsError = false;
+let hoverHintTimer = null;
+let hoverHintTarget = null;
 
 function logWarning(message, error) {
   if (error) {
@@ -124,6 +158,102 @@ function clearStatusResetTimer() {
 function clearTransientStatus() {
   transientStatusMessage = "";
   transientStatusIsError = false;
+}
+
+function clearHoverHintTimer() {
+  if (hoverHintTimer === null) {
+    return;
+  }
+  clearTimeout(hoverHintTimer);
+  hoverHintTimer = null;
+}
+
+function hideHoverHint() {
+  clearHoverHintTimer();
+  hoverHintTarget = null;
+  controls.hoverHint.classList.remove("is-visible");
+  controls.hoverHint.setAttribute("aria-hidden", "true");
+}
+
+function positionHoverHint(target) {
+  const rect = target.getBoundingClientRect();
+  const hintRect = controls.hoverHint.getBoundingClientRect();
+  const maxLeft = Math.max(8, window.innerWidth - hintRect.width - 8);
+  const preferredLeft = rect.left + HOVER_HINT_OFFSET_X;
+  const left = Math.min(Math.max(8, preferredLeft), maxLeft);
+  const fitsBelow = rect.bottom + HOVER_HINT_OFFSET_Y + hintRect.height <= window.innerHeight - 8;
+  const top = fitsBelow
+    ? rect.bottom + HOVER_HINT_OFFSET_Y
+    : Math.max(8, rect.top - hintRect.height - HOVER_HINT_OFFSET_Y);
+  controls.hoverHint.style.left = `${left}px`;
+  controls.hoverHint.style.top = `${top}px`;
+}
+
+function showHoverHint(target, message) {
+  hoverHintTarget = target;
+  controls.hoverHint.textContent = message;
+  controls.hoverHint.setAttribute("aria-hidden", "false");
+  controls.hoverHint.classList.add("is-visible");
+  positionHoverHint(target);
+}
+
+function scheduleHoverHint(target, message) {
+  clearHoverHintTimer();
+  hoverHintTimer = setTimeout(() => {
+    hoverHintTimer = null;
+    if (hoverHintTarget !== target) {
+      return;
+    }
+    showHoverHint(target, message);
+  }, HOVER_HINT_DELAY_MS);
+}
+
+function attachHoverHint(fieldName, target) {
+  const message = hoverHintCopy[fieldName];
+  if (!message || !target) {
+    return;
+  }
+
+  target.dataset.hoverHint = message;
+
+  const handleEnter = () => {
+    hoverHintTarget = target;
+    scheduleHoverHint(target, message);
+  };
+  const handleLeave = () => {
+    if (hoverHintTarget === target) {
+      hideHoverHint();
+    }
+  };
+
+  target.addEventListener("pointerenter", handleEnter);
+  target.addEventListener("pointerleave", handleLeave);
+  target.addEventListener("focusin", handleEnter);
+  target.addEventListener("focusout", handleLeave);
+}
+
+function setupHoverHints() {
+  [...basicSettingFields, ...advancedSettingFields].forEach((fieldName) => {
+    const element = controls[fieldName];
+    if (!element) {
+      return;
+    }
+
+    const target = element.closest(".field, .toggle-field");
+    attachHoverHint(fieldName, target);
+  });
+
+  window.addEventListener("scroll", () => {
+    if (hoverHintTarget && controls.hoverHint.classList.contains("is-visible")) {
+      positionHoverHint(hoverHintTarget);
+    }
+  }, { passive: true });
+
+  window.addEventListener("resize", () => {
+    if (hoverHintTarget && controls.hoverHint.classList.contains("is-visible")) {
+      positionHoverHint(hoverHintTarget);
+    }
+  });
 }
 
 function scheduleTransientStatusReset() {
@@ -426,4 +556,5 @@ try {
   renderState();
 }
 
+setupHoverHints();
 syncValueLabels();

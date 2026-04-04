@@ -17,10 +17,48 @@ function createDetachedSendTarget(context, nodes) {
   return { input };
 }
 
+function getOutputLevel(settings) {
+  return clamp(settings.outputGain ?? 70, 0, 100) / 100;
+}
+
+function getOriginalMixLevel(settings) {
+  return clamp(settings.originalMix ?? 18, 0, 100) / 100;
+}
+
+function getWidthScale(settings) {
+  return clamp((settings.width ?? 55) / 55, 0.45, 1.85);
+}
+
+function getToneBias(settings) {
+  return clamp(settings.tone ?? 0, -100, 100);
+}
+
+function buildRoomSettings(safe) {
+  const roomBase = getRoomPresetConfig(safe.roomPreset);
+  const widthScale = getWidthScale(safe);
+  const toneBias = getToneBias(safe);
+  return {
+    ...roomBase,
+    stereoWidth: roomBase.stereoWidth * widthScale,
+    reflectionWidth: roomBase.reflectionWidth * Math.max(0.55, Math.min(1.9, widthScale * 1.08)),
+    earlyToneCut: Math.max(0, roomBase.earlyToneCut - toneBias * 2),
+    lateToneCut: Math.max(0, roomBase.lateToneCut - toneBias * 6.5),
+    wetToneCut: Math.max(0, roomBase.wetToneCut - toneBias * 5.5),
+    directToneLift: roomBase.directToneLift + toneBias * 0.018,
+  };
+}
+
 function buildAudienceSettings(safe) {
   const audienceBase = getAudiencePositionConfig(safe.audiencePosition);
+  const widthScale = getWidthScale(safe);
+  const toneBias = getToneBias(safe);
   return {
     ...audienceBase,
+    stereoWidth: audienceBase.stereoWidth * Math.max(0.55, Math.min(1.9, widthScale)),
+    directCutHz: Math.max(0, (audienceBase.directCutHz || 0) - toneBias * 7),
+    wetLowpassCut: Math.max(0, (audienceBase.wetLowpassCut || 0) - toneBias * 4),
+    wetHighpassBoostHz: Math.max(0, (audienceBase.wetHighpassBoostHz || 0) + toneBias * 1.2),
+    wetLowShelfCutDb: (audienceBase.wetLowShelfCutDb || 0) + toneBias * 0.012,
     directMixTrim: audienceBase.directMixTrim * clamp(safe.directMixTrim, 0, 200) / 100,
     preDelayScale: audienceBase.preDelayScale * clamp(safe.preDelayScale, 0, 200) / 100,
     tailGainScale: audienceBase.tailGainScale * clamp(safe.tailGainScale, 0, 200) / 100,
@@ -35,6 +73,8 @@ const PARTIAL_UPDATE_KEYS = [
   "delayMs",
   "reverbIntensity",
   "peakSuppression",
+  "outputGain",
+  "originalMix",
   "directMixTrim",
   "preDelayScale",
   "tailGainScale",
@@ -59,11 +99,11 @@ export function canUpdateLiveConcertGraphInPlace(graph, previousSettings, nextSe
 
 export function createLiveConcertGraph(context, settings) {
   const safe = withDefaults(settings);
-  const room = getRoomPresetConfig(safe.roomPreset);
+  const room = buildRoomSettings(safe);
   const audience = buildAudienceSettings(safe);
   const trackCount = clamp(safe.cloneCount, 1, 8);
-  const outputLevel = 0.50;
-  const originalMix = 0.18;
+  const outputLevel = getOutputLevel(safe);
+  const originalMix = getOriginalMixLevel(safe);
   const complexity = getComplexityProfile(trackCount, safe.roomPreset, safe.audiencePreset, safe.reverbIntensity);
   const lateBusVariants = [];
   if (safe.experimentalSubtleSpaceResponse && (safe.roomPreset === "arena" || safe.roomPreset === "stadium")) {
@@ -258,9 +298,11 @@ export function createLiveConcertGraph(context, settings) {
 
 export function updateLiveConcertGraph(context, graph, settings) {
   const safe = withDefaults(settings);
-  const room = getRoomPresetConfig(safe.roomPreset);
+  const room = buildRoomSettings(safe);
   const audience = buildAudienceSettings(safe);
   const trackCount = clamp(safe.cloneCount, 1, 8);
+  const outputLevel = getOutputLevel(safe);
+  const originalMix = getOriginalMixLevel(safe);
   const complexity = getComplexityProfile(trackCount, safe.roomPreset, safe.audiencePreset, safe.reverbIntensity);
   const layerCache = buildLayerComputationCache(
     trackCount,
@@ -299,8 +341,12 @@ export function updateLiveConcertGraph(context, graph, settings) {
     });
   });
 
+  if (graph.originalGain?.gain) {
+    graph.originalGain.gain.value = originalMix;
+  }
+
   updateMasterOutput({
-    outputLevel: 0.50,
+    outputLevel,
     peakSuppression: safe.peakSuppression,
     trackCount,
     context,

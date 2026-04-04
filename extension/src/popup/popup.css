@@ -26,6 +26,7 @@ body {
 
 body {
   max-height: 600px;
+  position: relative;
   font-family: "Segoe UI", "Noto Sans KR", sans-serif;
   color: var(--text);
   background:
@@ -382,4 +383,27 @@ input[type="range"] {
   font-size: 10px;
   letter-spacing: 0.04em;
   color: rgba(159, 176, 199, 0.72);
+}
+
+.hover-hint {
+  position: fixed;
+  z-index: 999;
+  max-width: 240px;
+  padding: 9px 11px;
+  border: 1px solid rgba(240, 141, 73, 0.24);
+  border-radius: 12px;
+  background: rgba(8, 12, 18, 0.96);
+  color: #f5f7fb;
+  font-size: 11px;
+  line-height: 1.45;
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.34);
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.hover-hint.is-visible {
+  opacity: 1;
+  transform: translateY(0);
 }
