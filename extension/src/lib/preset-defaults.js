@@ -21,6 +21,6 @@ export const DEFAULT_SETTINGS = {
   peakSuppression: 70,
   width: 55,
   tone: 0,
-  outputGain: 50,
+  outputGain: 60,
   originalMix: 18,
 };
