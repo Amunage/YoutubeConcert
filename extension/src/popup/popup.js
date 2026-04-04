@@ -49,6 +49,8 @@ controls.appVersion.textContent = `v${chrome.runtime.getManifest().version}`;
 const SETTINGS_STORAGE_KEY = "concertSettings";
 const ADVANCED_OPEN_KEY = "concertAdvancedOpen";
 const SETTINGS_DEBOUNCE_MS = 140;
+const STATUS_RESET_DELAY_MS = 4200;
+const INITIAL_STATE_RETRY_DELAY_MS = 180;
 
 const settingFields = [
   "roomPreset",
@@ -99,6 +101,49 @@ let currentState = {
 
 let pendingSettingsTimer = null;
 let pendingSettingsPromise = Promise.resolve();
+let statusResetTimer = null;
+let transientStatusMessage = "";
+let transientStatusIsError = false;
+
+function logWarning(message, error) {
+  if (error) {
+    console.warn(`[YTConcert] ${message}`, error);
+    return;
+  }
+  console.warn(`[YTConcert] ${message}`);
+}
+
+function clearStatusResetTimer() {
+  if (statusResetTimer === null) {
+    return;
+  }
+  clearTimeout(statusResetTimer);
+  statusResetTimer = null;
+}
+
+function clearTransientStatus() {
+  transientStatusMessage = "";
+  transientStatusIsError = false;
+}
+
+function scheduleTransientStatusReset() {
+  clearStatusResetTimer();
+  statusResetTimer = setTimeout(() => {
+    statusResetTimer = null;
+    clearTransientStatus();
+    renderState();
+  }, STATUS_RESET_DELAY_MS);
+}
+
+function showTransientError(message, options = {}) {
+  const { shouldReset = true } = options;
+  transientStatusMessage = message;
+  transientStatusIsError = true;
+  renderState();
+  if (shouldReset) {
+    scheduleTransientStatusReset();
+  }
+}
 
 function updateTabMeta() {
   const title = (currentState.tabTitle || "").trim();
@@ -206,18 +251,38 @@ function syncValueLabels() {
 
 function renderState() {
   const running = Boolean(currentState.running);
-  controls.statusText.textContent = running ? "Live processing" : currentState.lastError || "Idle";
+  const statusMessage = transientStatusMessage || (running ? "Live processing" : currentState.lastError || "Idle");
+  const isError = transientStatusIsError || (!running && Boolean(currentState.lastError));
+  controls.statusText.textContent = statusMessage;
+  controls.statusText.classList.toggle("is-error", isError);
   controls.toggleButton.textContent = running ? "Stop" : "Start";
   controls.toggleButton.classList.toggle("is-running", running);
   updateTabMeta();
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function refreshState() {
   const response = await chrome.runtime.sendMessage({ type: "popup:get-state" });
   if (!response?.ok) return;
+  clearTransientStatus();
   currentState = { ...currentState, ...response.state, settings: withDefaults(response.state?.settings) };
   applySettingsToForm(currentState.settings);
   renderState();
+}
+
+async function refreshStateWithRetry(retries = 1) {
+  try {
+    await refreshState();
+  } catch (error) {
+    if (retries <= 0) {
+      throw error;
+    }
+    await delay(INITIAL_STATE_RETRY_DELAY_MS);
+    await refreshStateWithRetry(retries - 1);
+  }
 }
 
 async function persistSettings() {
@@ -240,13 +305,19 @@ function queueSettingsPersist(delayMs = SETTINGS_DEBOUNCE_MS) {
   clearPendingSettingsTimer();
   pendingSettingsTimer = setTimeout(() => {
     pendingSettingsTimer = null;
-    pendingSettingsPromise = persistSettings().catch(() => {});
+    pendingSettingsPromise = persistSettings().catch((error) => {
+      logWarning("Failed to persist queued settings.", error);
+      showTransientError("Could not save settings.");
+    });
   }, delayMs);
 }
 
 async function flushQueuedSettings() {
   clearPendingSettingsTimer();
-  pendingSettingsPromise = persistSettings().catch(() => {});
+  pendingSettingsPromise = persistSettings().catch((error) => {
+    logWarning("Failed to flush queued settings.", error);
+    showTransientError("Could not save settings.");
+  });
   await pendingSettingsPromise;
 }
 
@@ -262,40 +333,55 @@ async function persistAdvancedOpen() {
 }
 
 async function toggleCapture() {
-  const settings = getSettingsFromForm();
-  clearPendingSettingsTimer();
-  await chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: settings });
+  try {
+    const settings = getSettingsFromForm();
+    clearPendingSettingsTimer();
+    await chrome.storage.local.set({ [SETTINGS_STORAGE_KEY]: settings });
 
-  if (currentState.running) {
-    const response = await chrome.runtime.sendMessage({ type: "popup:stop-capture" });
-    if (response?.ok) {
-      currentState = { ...currentState, ...response.state, settings };
-      renderState();
+    if (currentState.running) {
+      const response = await chrome.runtime.sendMessage({ type: "popup:stop-capture" });
+      if (response?.ok) {
+        clearTransientStatus();
+        currentState = { ...currentState, ...response.state, settings };
+        renderState();
+      } else {
+        showTransientError(response?.error || "Could not stop capture.");
+      }
+      return;
     }
-    return;
-  }
 
-  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const response = await chrome.runtime.sendMessage({
-    type: "popup:start-capture",
-    payload: { tabId: activeTab?.id, settings },
-  });
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const response = await chrome.runtime.sendMessage({
+      type: "popup:start-capture",
+      payload: { tabId: activeTab?.id, settings },
+    });
 
-  if (response?.ok) {
-    currentState = { ...currentState, ...response.state, settings, lastError: "" };
-  } else {
-    currentState = { ...currentState, running: false, lastError: response?.error || "Could not start capture.", settings };
+    if (response?.ok) {
+      clearStatusResetTimer();
+      clearTransientStatus();
+      currentState = { ...currentState, ...response.state, settings, lastError: "" };
+    } else {
+      currentState = { ...currentState, running: false, lastError: response?.error || "Could not start capture.", settings };
+    }
+    renderState();
+  } catch (error) {
+    logWarning("Toggle capture failed.", error);
+    showTransientError("Could not update capture state.");
   }
-  renderState();
 }
 
 controls.toggleButton.addEventListener("click", toggleCapture);
 controls.resetAdvancedButton.addEventListener("click", () => {
   applyAdvancedDefaultsToForm();
-  flushQueuedSettings().catch(() => {});
+  flushQueuedSettings().catch((error) => {
+    logWarning("Failed to reset advanced settings.", error);
+    showTransientError("Could not save settings.");
+  });
 });
 controls.advancedOptions.addEventListener("toggle", () => {
-  persistAdvancedOpen().catch(() => {});
+  persistAdvancedOpen().catch((error) => {
+    logWarning("Failed to persist advanced section state.", error);
+  });
 });
 
 settingFields.forEach((fieldName) => {
@@ -306,21 +392,38 @@ settingFields.forEach((fieldName) => {
   });
   element.addEventListener("change", () => {
     syncValueLabels();
-    flushQueuedSettings().catch(() => {});
+    flushQueuedSettings().catch((error) => {
+      logWarning(`Failed to save setting change for ${fieldName}.`, error);
+      showTransientError("Could not save settings.");
+    });
   });
 });
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === "offscreen:state") {
+    clearTransientStatus();
     currentState = { ...currentState, ...message.payload, settings: withDefaults(message.payload?.settings) };
     renderState();
   }
   if (message?.type === "offscreen:error") {
     currentState = { ...currentState, running: false, lastError: message.payload?.error || "Audio processing error" };
     renderState();
+    scheduleTransientStatusReset();
   }
 });
 
-await loadStoredSettings();
-await refreshState();
+try {
+  await loadStoredSettings();
+} catch (error) {
+  logWarning("Failed to load stored popup settings.", error);
+  applySettingsToForm(currentState.settings);
+}
+
+try {
+  await refreshStateWithRetry();
+} catch (error) {
+  logWarning("Initial popup state refresh failed; falling back to local defaults.", error);
+  renderState();
+}
+
 syncValueLabels();

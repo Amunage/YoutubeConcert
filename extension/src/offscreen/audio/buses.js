@@ -40,10 +40,14 @@ function scheduleContextTimeCleanup(callback, delaySeconds, context) {
     callback();
     try {
       source.disconnect();
-    } catch {}
+    } catch (error) {
+      // The source may already be disconnected during teardown.
+    }
     try {
       gain.disconnect();
-    } catch {}
+    } catch (error) {
+      // The gain may already be disconnected during teardown.
+    }
   };
   source.start(context.currentTime);
   source.stop(context.currentTime + Math.max(0.01, delaySeconds));
@@ -51,13 +55,19 @@ function scheduleContextTimeCleanup(callback, delaySeconds, context) {
     source.onended = null;
     try {
       source.stop();
-    } catch {}
+    } catch (error) {
+      // The source may already be stopped if cleanup runs twice.
+    }
     try {
       source.disconnect();
-    } catch {}
+    } catch (error) {
+      // The source may already be disconnected during teardown.
+    }
     try {
       gain.disconnect();
-    } catch {}
+    } catch (error) {
+      // The gain may already be disconnected during teardown.
+    }
   };
 }
 

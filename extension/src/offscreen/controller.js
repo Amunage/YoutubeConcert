@@ -3,6 +3,14 @@ import { DEFAULT_SETTINGS, withDefaults } from "../lib/presets.js";
 
 const engine = new LiveConcertEngine();
 
+function logWarning(message, error) {
+  if (error) {
+    console.warn(`[YTConcert] ${message}`, error);
+    return;
+  }
+  console.warn(`[YTConcert] ${message}`);
+}
+
 let activeState = {
   running: false,
   tabId: null,
@@ -88,10 +96,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     startCapture(message.payload)
       .then(() => sendResponse({ ok: true }))
       .catch(async (error) => {
-        await engine.stop().catch(() => {});
+        await engine.stop().catch((stopError) => {
+          logWarning("Failed to stop engine after start-capture error.", stopError);
+        });
         resetActiveState();
-        await sendState().catch(() => {});
-        sendError(error).catch(() => {});
+        await sendState().catch((stateError) => {
+          logWarning("Failed to send reset offscreen state after start-capture error.", stateError);
+        });
+        sendError(error).catch((sendErrorFailure) => {
+          logWarning("Failed to forward offscreen start-capture error.", sendErrorFailure);
+        });
         sendResponse({ ok: false, error: error.message });
       });
     return true;
@@ -101,7 +115,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     stopCapture()
       .then(() => sendResponse({ ok: true }))
       .catch((error) => {
-        sendError(error).catch(() => {});
+        sendError(error).catch((sendErrorFailure) => {
+          logWarning("Failed to forward offscreen stop-capture error.", sendErrorFailure);
+        });
         sendResponse({ ok: false, error: error.message });
       });
     return true;
@@ -114,7 +130,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       settings,
     };
     engine.updateSettings(settings);
-    sendState().catch(() => {});
+    sendState().catch((error) => {
+      logWarning("Failed to broadcast updated offscreen settings state.", error);
+    });
     sendResponse({ ok: true });
     return false;
   }

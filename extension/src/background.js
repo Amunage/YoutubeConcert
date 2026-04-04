@@ -1,5 +1,7 @@
 const OFFSCREEN_PATH = "src/offscreen/offscreen.html";
 const SESSION_STATE_KEY = "concertSessionState";
+const OFFSCREEN_READY_RETRY_COUNT = 10;
+const OFFSCREEN_READY_RETRY_DELAY_MS = 50;
 
 let sessionState = {
   running: false,
@@ -11,6 +13,14 @@ let sessionState = {
 };
 
 let sessionStateReady = null;
+
+function logWarning(message, error) {
+  if (error) {
+    console.warn(`[YTConcert] ${message}`, error);
+    return;
+  }
+  console.warn(`[YTConcert] ${message}`);
+}
 
 function getDefaultSessionState() {
   return {
@@ -32,7 +42,8 @@ async function ensureSessionStateLoaded() {
           ...(stored?.[SESSION_STATE_KEY] || {}),
         };
       })
-      .catch(() => {
+      .catch((error) => {
+        logWarning("Failed to restore session state from storage.session.", error);
         sessionState = getDefaultSessionState();
       });
   }
@@ -70,6 +81,28 @@ async function ensureOffscreenDocument() {
     reasons: ["USER_MEDIA"],
     justification: "Process current tab audio in a persistent offscreen audio graph.",
   });
+}
+
+async function waitForOffscreenReady() {
+  for (let attempt = 0; attempt < OFFSCREEN_READY_RETRY_COUNT; attempt += 1) {
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: "offscreen:get-state",
+        target: "offscreen",
+      });
+      if (response?.ok) {
+        return;
+      }
+    } catch (error) {
+      if (attempt === OFFSCREEN_READY_RETRY_COUNT - 1) {
+        throw error;
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, OFFSCREEN_READY_RETRY_DELAY_MS));
+  }
+
+  throw new Error("Offscreen audio processor did not become ready in time.");
 }
 
 async function closeOffscreenDocument() {
@@ -122,7 +155,8 @@ async function syncStateFromOffscreen() {
         lastError: sessionState.lastError,
       });
     }
-  } catch {
+  } catch (error) {
+    logWarning("Failed to sync session state from offscreen document.", error);
   }
 
   return sessionState;
@@ -131,10 +165,13 @@ async function syncStateFromOffscreen() {
 async function startCapture(request = {}) {
   await ensureSessionStateLoaded();
   if (await hasOffscreenDocument()) {
-    await closeOffscreenDocument().catch(() => {});
+    await closeOffscreenDocument().catch((error) => {
+      logWarning("Failed to close existing offscreen document before restart.", error);
+    });
   }
   const targetTab = await getTabForCapture(request.tabId);
   await ensureOffscreenDocument();
+  await waitForOffscreenReady();
 
   const streamId = await chrome.tabCapture.getMediaStreamId({
     targetTabId: targetTab.id,
@@ -172,7 +209,9 @@ async function handleCaptureFailure(errorMessage = "An audio processing error oc
     startedAt: 0,
     lastError: errorMessage,
   });
-  await closeOffscreenDocument().catch(() => {});
+  await closeOffscreenDocument().catch((error) => {
+    logWarning("Failed to close offscreen document after capture failure.", error);
+  });
   broadcastSessionState();
   return sessionState;
 }
@@ -184,7 +223,8 @@ async function stopCapture() {
       type: "offscreen:stop-capture",
       target: "offscreen",
     });
-  } catch {
+  } catch (error) {
+    logWarning("Failed to stop capture in offscreen document.", error);
   }
 
   await setSessionState({
@@ -204,7 +244,9 @@ function broadcastSessionState() {
   chrome.runtime.sendMessage({
     type: "offscreen:state",
     payload: sessionState,
-  }).catch(() => {});
+  }).catch((error) => {
+    logWarning("Failed to broadcast session state to popup.", error);
+  });
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -216,7 +258,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     ensureSessionStateLoaded()
       .then(() => syncStateFromOffscreen())
       .then((state) => sendResponse({ ok: true, state }))
-      .catch(() => sendResponse({ ok: true, state: sessionState }));
+      .catch((error) => {
+        logWarning("Failed to serve popup state request.", error);
+        sendResponse({ ok: true, state: sessionState });
+      });
     return true;
   }
 
@@ -253,23 +298,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           payload: {
             settings: sessionState.settings,
           },
-        }).catch(() => {});
+        }).catch((error) => {
+          logWarning("Failed to forward updated settings to offscreen document.", error);
+        });
 
         sendResponse({ ok: true, state: sessionState });
       })
-      .catch(() => sendResponse({ ok: false, error: "Could not update settings." }));
+      .catch((error) => {
+        logWarning("Failed to update session settings.", error);
+        sendResponse({ ok: false, error: "Could not update settings." });
+      });
     return true;
   }
 
   if (message.type === "offscreen:state") {
     ensureSessionStateLoaded()
       .then(() => setSessionState({ ...sessionState, ...message.payload }))
-      .catch(() => {});
+      .catch((error) => {
+        logWarning("Failed to persist offscreen state update.", error);
+      });
     return false;
   }
 
   if (message.type === "offscreen:error") {
-    handleCaptureFailure(message.payload?.error || "An audio processing error occurred.").catch(() => {});
+    handleCaptureFailure(message.payload?.error || "An audio processing error occurred.").catch((error) => {
+      logWarning("Failed to handle offscreen processing error.", error);
+    });
     return false;
   }
 
@@ -284,7 +338,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
       }
       return stopCapture();
     })
-    .catch(() => {});
+    .catch((error) => {
+      logWarning("Failed to react to tab removal while capture was active.", error);
+    });
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -309,5 +365,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       });
       broadcastSessionState();
     })
-    .catch(() => {});
+    .catch((error) => {
+      logWarning("Failed to react to tab title update while capture was active.", error);
+    });
 });

@@ -1,14 +1,10 @@
-import { withDefaults } from "../../lib/presets.js";
+import { clamp, withDefaults } from "../../lib/presets.js";
 import {
   canUpdateLiveConcertGraphInPlace,
   createLiveConcertGraph,
   updateLiveConcertAdaptiveWetness,
   updateLiveConcertGraph,
 } from "./graph.js";
-
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
 
 function toDb(value) {
   return 20 * Math.log10(Math.max(value, 1e-6));
@@ -31,6 +27,14 @@ function measure(name, startMark, endMark) {
   if (typeof performance?.clearMeasures === "function") {
     performance.clearMeasures(name);
   }
+}
+
+function logWarning(message, error) {
+  if (error) {
+    console.warn(`[YTConcert] ${message}`, error);
+    return;
+  }
+  console.warn(`[YTConcert] ${message}`);
 }
 
 export class LiveConcertEngine {
@@ -71,6 +75,7 @@ export class LiveConcertEngine {
     try {
       this.sourceNode.disconnect();
     } catch (error) {
+      logWarning("Source node was already disconnected during graph rebuild.", error);
     }
     this.outputNodes = createLiveConcertGraph(this.audioContext, settings);
     this.sourceNode.connect(this.outputNodes.input);
@@ -167,13 +172,16 @@ export class LiveConcertEngine {
       try {
         this.sourceNode.disconnect();
       } catch (error) {
+        logWarning("Source node was already disconnected during engine stop.", error);
       }
     }
     if (this.outputNodes?.cleanup) {
       this.outputNodes.cleanup();
     }
     if (this.audioContext) {
-      await this.audioContext.close().catch(() => {});
+      await this.audioContext.close().catch((error) => {
+        logWarning("Failed to close audio context during engine stop.", error);
+      });
     }
     this.audioContext = null;
     this.sourceStream = null;
