@@ -3,20 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>YT Concert Live</title>
+  <title data-i18n="popupTitle">YT Concert Live</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <main class="popup-shell">
     <section class="hero">
       <p id="appVersion" class="app-version" aria-label="Extension version"></p>
-      <p class="eyebrow">Sound Live FX</p>
-      <h1>YT Concert Live</h1>
+      <p class="eyebrow" data-i18n="popupEyebrow">Sound Live FX</p>
+      <h1 data-i18n="popupHeading">YT Concert Live</h1>
     </section>
 
     <section class="card status-card">
       <div>
-        <p class="label">Status</p>
+        <p class="label" data-i18n="statusLabel">Status</p>
         <p id="statusText" class="status-text" aria-live="polite">Idle</p>
         <p id="tabMeta" class="tab-meta" aria-label="Current tab title">
           <span id="tabMetaTrack" class="tab-meta-track">
@@ -25,130 +25,130 @@
           </span>
         </p>
       </div>
-      <button id="toggleButton" class="primary-button" type="button">Start</button>
+      <button id="toggleButton" class="primary-button" type="button" data-i18n="startButton">Start</button>
     </section>
 
     <section class="card">
       <div class="field">
-        <label for="roomPreset">Space Preset</label>
+        <label for="roomPreset" data-i18n="spacePresetLabel">Space Preset</label>
         <select id="roomPreset">
-          <option value="club">Club</option>
-          <option value="theater">Theater</option>
-          <option value="arena">Arena</option>
-          <option value="stadium">Stadium</option>
+          <option value="club" data-i18n="roomPresetClub">Club</option>
+          <option value="theater" data-i18n="roomPresetTheater">Theater</option>
+          <option value="arena" data-i18n="roomPresetArena">Arena</option>
+          <option value="stadium" data-i18n="roomPresetStadium">Stadium</option>
         </select>
       </div>
 
       <div class="field">
-        <label for="audiencePosition">Listener Position <span id="audiencePositionValue"></span></label>
+        <label for="audiencePosition"><span data-i18n="listenerPositionLabel">Listener Position</span> <span id="audiencePositionValue"></span></label>
         <input id="audiencePosition" type="range" min="1" max="10" step="1">
       </div>
 
       <div class="field">
-        <label for="cloneCount">Layer Count <span id="cloneCountValue"></span></label>
+        <label for="cloneCount"><span data-i18n="layerCountLabel">Layer Count</span> <span id="cloneCountValue"></span></label>
         <input id="cloneCount" type="range" min="1" max="8" step="1">
       </div>
 
       <div class="field">
-        <label for="delayMs">Delay <span id="delayMsValue"></span></label>
+        <label for="delayMs"><span data-i18n="delayLabel">Delay</span> <span id="delayMsValue"></span></label>
         <input id="delayMs" type="range" min="0" max="320" step="5">
       </div>
     </section>
 
     <details class="card advanced-card" id="advancedOptions">
       <summary class="advanced-summary">
-        <span>Advanced</span>
-        <span class="advanced-summary-hint">Fine-tune</span>
+        <span data-i18n="advancedLabel">Advanced</span>
+        <span class="advanced-summary-hint" data-i18n="advancedHint">Fine-tune</span>
       </summary>
 
       <div class="advanced-fields">
         <div class="field">
-          <label for="ensembleVolume">Layer Volume <span id="ensembleVolumeValue"></span></label>
+          <label for="ensembleVolume"><span data-i18n="layerVolumeLabel">Layer Volume</span> <span id="ensembleVolumeValue"></span></label>
           <input id="ensembleVolume" type="range" min="0" max="100" step="1">
         </div>
 
         <div class="field">
-          <label for="volumeDecay">Layer Decay <span id="volumeDecayValue"></span></label>
+          <label for="volumeDecay"><span data-i18n="layerDecayLabel">Layer Decay</span> <span id="volumeDecayValue"></span></label>
           <input id="volumeDecay" type="range" min="0" max="100" step="1">
         </div>
 
         <div class="field">
-          <label for="reverbIntensity">Reverb Intensity <span id="reverbIntensityValue"></span></label>
+          <label for="reverbIntensity"><span data-i18n="reverbIntensityLabel">Reverb Intensity</span> <span id="reverbIntensityValue"></span></label>
           <input id="reverbIntensity" type="range" min="0" max="100" step="1">
         </div>
 
         <div class="field">
-          <label for="diffusionAmount">Diffusion <span id="diffusionAmountValue"></span></label>
+          <label for="diffusionAmount"><span data-i18n="diffusionLabel">Diffusion</span> <span id="diffusionAmountValue"></span></label>
           <input id="diffusionAmount" type="range" min="0" max="100" step="1">
         </div>
 
         <div class="field">
-          <label for="auxiliaryAmount">Auxiliary Reflections <span id="auxiliaryAmountValue"></span></label>
+          <label for="auxiliaryAmount"><span data-i18n="auxiliaryReflectionsLabel">Auxiliary Reflections</span> <span id="auxiliaryAmountValue"></span></label>
           <input id="auxiliaryAmount" type="range" min="0" max="100" step="1">
         </div>
 
         <div class="field">
-          <label for="peakSuppression">Peak Suppression <span id="peakSuppressionValue"></span></label>
+          <label for="peakSuppression"><span data-i18n="peakSuppressionLabel">Peak Suppression</span> <span id="peakSuppressionValue"></span></label>
           <input id="peakSuppression" type="range" min="0" max="100" step="1">
         </div>
 
         <div class="field">
-          <label for="directMixTrim">Direct Mix <span id="directMixTrimValue"></span></label>
+          <label for="directMixTrim"><span data-i18n="directMixLabel">Direct Mix</span> <span id="directMixTrimValue"></span></label>
           <input id="directMixTrim" type="range" min="0" max="200" step="5">
         </div>
 
         <div class="field">
-          <label for="preDelayScale">Pre-delay Scale <span id="preDelayScaleValue"></span></label>
+          <label for="preDelayScale"><span data-i18n="preDelayScaleLabel">Pre-delay Scale</span> <span id="preDelayScaleValue"></span></label>
           <input id="preDelayScale" type="range" min="0" max="200" step="5">
         </div>
 
         <div class="field">
-          <label for="tailGainScale">Reverb Tail Level <span id="tailGainScaleValue"></span></label>
+          <label for="tailGainScale"><span data-i18n="reverbTailLevelLabel">Reverb Tail Level</span> <span id="tailGainScaleValue"></span></label>
           <input id="tailGainScale" type="range" min="0" max="200" step="5">
         </div>
 
         <div class="field">
-          <label for="reflectionSpacing">Reflection Spacing <span id="reflectionSpacingValue"></span></label>
+          <label for="reflectionSpacing"><span data-i18n="reflectionSpacingLabel">Reflection Spacing</span> <span id="reflectionSpacingValue"></span></label>
           <input id="reflectionSpacing" type="range" min="50" max="200" step="5">
         </div>
 
         <div class="field">
-          <label for="dynamicWetTrimStrength">Auto Wet Trim <span id="dynamicWetTrimStrengthValue"></span></label>
+          <label for="dynamicWetTrimStrength"><span data-i18n="autoWetTrimLabel">Auto Wet Trim</span> <span id="dynamicWetTrimStrengthValue"></span></label>
           <input id="dynamicWetTrimStrength" type="range" min="0" max="200" step="5">
         </div>
 
         <section class="experimental-section" aria-labelledby="experimentalTitle">
           <div class="experimental-header">
             <div>
-              <p id="experimentalTitle" class="experimental-title">Experimental</p>
-              <p class="experimental-copy">Optional tests that stay off by default.</p>
+              <p id="experimentalTitle" class="experimental-title" data-i18n="experimentalLabel">Experimental</p>
+              <p class="experimental-copy" data-i18n="experimentalCopy">Optional tests that stay off by default.</p>
             </div>
           </div>
 
           <label class="toggle-field" for="experimentalLargeSpaceModulation">
             <div class="toggle-copy">
-              <span class="toggle-title">Large Space Micro Modulation</span>
+              <span class="toggle-title" data-i18n="experimentalLargeSpaceModulationLabel">Large Space Micro Modulation</span>
             </div>
             <input id="experimentalLargeSpaceModulation" type="checkbox" role="switch">
           </label>
 
           <label class="toggle-field" for="experimentalSubtleSpaceResponse">
             <div class="toggle-copy">
-              <span class="toggle-title">Subtle Space Response</span>
+              <span class="toggle-title" data-i18n="experimentalSubtleSpaceResponseLabel">Subtle Space Response</span>
             </div>
             <input id="experimentalSubtleSpaceResponse" type="checkbox" role="switch">
           </label>
 
           <label class="toggle-field" for="experimentalCrowdReaction">
             <div class="toggle-copy">
-              <span class="toggle-title">Crowd Reaction Layer</span>
+              <span class="toggle-title" data-i18n="experimentalCrowdReactionLabel">Crowd Reaction Layer</span>
             </div>
             <input id="experimentalCrowdReaction" type="checkbox" role="switch">
           </label>
         </section>
 
         <div class="advanced-actions">
-          <button id="resetAdvancedButton" class="secondary-button" type="button">Reset Advanced</button>
+          <button id="resetAdvancedButton" class="secondary-button" type="button" data-i18n="resetAdvancedButton">Reset Advanced</button>
         </div>
       </div>
     </details>

@@ -14,6 +14,10 @@ let sessionState = {
 
 let sessionStateReady = null;
 
+function t(key, substitutions) {
+  return chrome.i18n.getMessage(key, substitutions) || key;
+}
+
 function logWarning(message, error) {
   if (error) {
     console.warn(`[YTConcert] ${message}`, error);
@@ -123,7 +127,7 @@ async function getTabForCapture(tabId) {
   });
 
   if (!activeTab?.id) {
-    throw new Error("Could not find an active tab.");
+    throw new Error(t("errorCouldNotFindActiveTab"));
   }
 
   return activeTab;
@@ -200,7 +204,7 @@ async function startCapture(request = {}) {
   return sessionState;
 }
 
-async function handleCaptureFailure(errorMessage = "An audio processing error occurred.") {
+async function handleCaptureFailure(errorMessage = t("errorAudioProcessing")) {
   await setSessionState({
     ...sessionState,
     running: false,
@@ -269,7 +273,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     startCapture(message.payload)
       .then((state) => sendResponse({ ok: true, state }))
       .catch(async (error) => {
-        const failedState = await handleCaptureFailure(error.message || "Could not start tab audio capture.");
+        const failedState = await handleCaptureFailure(error.message || t("errorCouldNotStartTabAudioCapture"));
         sendResponse({ ok: false, error: failedState.lastError, state: failedState });
       });
     return true;
@@ -279,7 +283,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     stopCapture()
       .then((state) => sendResponse({ ok: true, state }))
       .catch((error) => {
-        sendResponse({ ok: false, error: error.message || "Could not stop tab audio capture." });
+        sendResponse({ ok: false, error: error.message || t("errorCouldNotStopTabAudioCapture") });
       });
     return true;
   }
@@ -306,7 +310,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       })
       .catch((error) => {
         logWarning("Failed to update session settings.", error);
-        sendResponse({ ok: false, error: "Could not update settings." });
+        sendResponse({ ok: false, error: t("errorCouldNotUpdateSettings") });
       });
     return true;
   }
@@ -321,7 +325,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "offscreen:error") {
-    handleCaptureFailure(message.payload?.error || "An audio processing error occurred.").catch((error) => {
+    handleCaptureFailure(message.payload?.error || t("errorAudioProcessing")).catch((error) => {
       logWarning("Failed to handle offscreen processing error.", error);
     });
     return false;

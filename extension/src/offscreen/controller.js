@@ -3,6 +3,10 @@ import { DEFAULT_SETTINGS, withDefaults } from "../lib/presets.js";
 
 const engine = new LiveConcertEngine();
 
+function t(key, substitutions) {
+  return chrome.i18n.getMessage(key, substitutions) || key;
+}
+
 function logWarning(message, error) {
   if (error) {
     console.warn(`[YTConcert] ${message}`, error);
@@ -40,7 +44,7 @@ async function sendError(error) {
   await chrome.runtime.sendMessage({
     type: "offscreen:error",
     payload: {
-      error: error?.message || "Offscreen audio processing failed.",
+      error: error?.message || t("errorOffscreenAudioProcessingFailed"),
     },
   });
 }

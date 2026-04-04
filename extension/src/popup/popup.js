@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, getAudienceLabelForPosition, withDefaults } from "../lib/presets.js";
+import { DEFAULT_SETTINGS, withDefaults } from "../lib/presets.js";
 
 const controls = {
   toggleButton: document.getElementById("toggleButton"),
@@ -101,25 +101,25 @@ const advancedSettingFields = [
   "experimentalCrowdReaction",
 ];
 
-const hoverHintCopy = {
-  roomPreset: "Chooses the base venue model, changing room size, tail behavior, reflection timing, and overall space character.",
-  audiencePosition: "Moves the listener from near-front to farther-back or outside perspectives, changing distance, width, and wet balance.",
-  cloneCount: "Sets how many layered support voices are generated around the source to create ensemble width and venue spread.",
-  delayMs: "Controls the base layer offset timing, affecting how tightly or loosely the live ensemble image opens up.",
-  ensembleVolume: "Sets the base loudness of the duplicated support layers before room and distance shaping are applied.",
-  volumeDecay: "Controls how quickly each additional layer loses level as the stack moves away from the lead layer.",
-  reverbIntensity: "Drives how strongly the wet buses are fed, affecting overall venue tail weight and depth.",
-  diffusionAmount: "Controls how much the diffusion bus softens and spreads the reverb field into a denser wash.",
-  auxiliaryAmount: "Scales the extra smear, blur, and reflection sends that create live-air and side-wall texture.",
-  peakSuppression: "Tightens the master dynamics chain so dense mixes stay controlled and less spiky.",
-  directMixTrim: "Adjusts how present the dry direct signal remains against the venue processing.",
-  preDelayScale: "Globally scales the early and late pre-delay timing so the room feels nearer or farther away.",
-  tailGainScale: "Raises or lowers the overall reverb tail energy after the room preset is chosen.",
-  reflectionSpacing: "Widens or compresses the timing gap between reflection taps for a tighter or larger wall feel.",
-  dynamicWetTrimStrength: "Changes how aggressively the adaptive wet system pulls reverb back when the source gets dense.",
-  experimentalLargeSpaceModulation: "Adds subtle motion to large-room tails so arena and stadium presets feel less static.",
-  experimentalSubtleSpaceResponse: "Adds a faint bloom behind the late tail to make large spaces feel less empty.",
-  experimentalCrowdReaction: "Adds a low-level crowd-air bed behind the reverb for a stronger live venue impression.",
+const hoverHintKeys = {
+  roomPreset: "hintRoomPreset",
+  audiencePosition: "hintAudiencePosition",
+  cloneCount: "hintCloneCount",
+  delayMs: "hintDelayMs",
+  ensembleVolume: "hintEnsembleVolume",
+  volumeDecay: "hintVolumeDecay",
+  reverbIntensity: "hintReverbIntensity",
+  diffusionAmount: "hintDiffusionAmount",
+  auxiliaryAmount: "hintAuxiliaryAmount",
+  peakSuppression: "hintPeakSuppression",
+  directMixTrim: "hintDirectMixTrim",
+  preDelayScale: "hintPreDelayScale",
+  tailGainScale: "hintTailGainScale",
+  reflectionSpacing: "hintReflectionSpacing",
+  dynamicWetTrimStrength: "hintDynamicWetTrimStrength",
+  experimentalLargeSpaceModulation: "hintExperimentalLargeSpaceModulation",
+  experimentalSubtleSpaceResponse: "hintExperimentalSubtleSpaceResponse",
+  experimentalCrowdReaction: "hintExperimentalCrowdReaction",
 };
 
 let currentState = {
@@ -138,6 +138,26 @@ let transientStatusMessage = "";
 let transientStatusIsError = false;
 let hoverHintTimer = null;
 let hoverHintTarget = null;
+
+function t(key, substitutions) {
+  return chrome.i18n.getMessage(key, substitutions) || key;
+}
+
+function applyI18n() {
+  document.title = t("popupTitle");
+  document.documentElement.lang = chrome.i18n.getUILanguage().split("-")[0] || "en";
+  document.querySelectorAll("[data-i18n]").forEach((node) => {
+    node.textContent = t(node.dataset.i18n);
+  });
+}
+
+function getAudienceLabelForPositionLocalized(position) {
+  const numericPosition = Number(position);
+  if (numericPosition >= 10) return t("audienceLabelOutside");
+  if (numericPosition >= 7) return t("audienceLabelRear");
+  if (numericPosition >= 4) return t("audienceLabelMiddle");
+  return t("audienceLabelFront");
+}
 
 function logWarning(message, error) {
   if (error) {
@@ -209,7 +229,8 @@ function scheduleHoverHint(target, message) {
 }
 
 function attachHoverHint(fieldName, target) {
-  const message = hoverHintCopy[fieldName];
+  const key = hoverHintKeys[fieldName];
+  const message = key ? t(key) : "";
   if (!message || !target) {
     return;
   }
@@ -363,7 +384,7 @@ function applyAdvancedDefaultsToForm() {
 }
 
 function syncValueLabels() {
-  controls.audiencePositionValue.textContent = `${controls.audiencePosition.value} - ${getAudienceLabelForPosition(Number(controls.audiencePosition.value))}`;
+  controls.audiencePositionValue.textContent = `${controls.audiencePosition.value} - ${getAudienceLabelForPositionLocalized(Number(controls.audiencePosition.value))}`;
   controls.cloneCountValue.textContent = `${controls.cloneCount.value}`;
   controls.delayMsValue.textContent = `${controls.delayMs.value}ms`;
   controls.ensembleVolumeValue.textContent = `${controls.ensembleVolume.value}%`;
@@ -381,11 +402,11 @@ function syncValueLabels() {
 
 function renderState() {
   const running = Boolean(currentState.running);
-  const statusMessage = transientStatusMessage || (running ? "Live processing" : currentState.lastError || "Idle");
+  const statusMessage = transientStatusMessage || (running ? t("statusLiveProcessing") : currentState.lastError || t("statusIdle"));
   const isError = transientStatusIsError || (!running && Boolean(currentState.lastError));
   controls.statusText.textContent = statusMessage;
   controls.statusText.classList.toggle("is-error", isError);
-  controls.toggleButton.textContent = running ? "Stop" : "Start";
+  controls.toggleButton.textContent = running ? t("stopButton") : t("startButton");
   controls.toggleButton.classList.toggle("is-running", running);
   updateTabMeta();
 }
@@ -437,7 +458,7 @@ function queueSettingsPersist(delayMs = SETTINGS_DEBOUNCE_MS) {
     pendingSettingsTimer = null;
     pendingSettingsPromise = persistSettings().catch((error) => {
       logWarning("Failed to persist queued settings.", error);
-      showTransientError("Could not save settings.");
+      showTransientError(t("errorCouldNotSaveSettings"));
     });
   }, delayMs);
 }
@@ -446,7 +467,7 @@ async function flushQueuedSettings() {
   clearPendingSettingsTimer();
   pendingSettingsPromise = persistSettings().catch((error) => {
     logWarning("Failed to flush queued settings.", error);
-    showTransientError("Could not save settings.");
+    showTransientError(t("errorCouldNotSaveSettings"));
   });
   await pendingSettingsPromise;
 }
@@ -475,7 +496,7 @@ async function toggleCapture() {
         currentState = { ...currentState, ...response.state, settings };
         renderState();
       } else {
-        showTransientError(response?.error || "Could not stop capture.");
+        showTransientError(response?.error || t("errorCouldNotStopCapture"));
       }
       return;
     }
@@ -491,12 +512,12 @@ async function toggleCapture() {
       clearTransientStatus();
       currentState = { ...currentState, ...response.state, settings, lastError: "" };
     } else {
-      currentState = { ...currentState, running: false, lastError: response?.error || "Could not start capture.", settings };
+      currentState = { ...currentState, running: false, lastError: response?.error || t("errorCouldNotStartCapture"), settings };
     }
     renderState();
   } catch (error) {
     logWarning("Toggle capture failed.", error);
-    showTransientError("Could not update capture state.");
+    showTransientError(t("errorCouldNotUpdateCaptureState"));
   }
 }
 
@@ -505,7 +526,7 @@ controls.resetAdvancedButton.addEventListener("click", () => {
   applyAdvancedDefaultsToForm();
   flushQueuedSettings().catch((error) => {
     logWarning("Failed to reset advanced settings.", error);
-    showTransientError("Could not save settings.");
+    showTransientError(t("errorCouldNotSaveSettings"));
   });
 });
 controls.advancedOptions.addEventListener("toggle", () => {
@@ -524,7 +545,7 @@ settingFields.forEach((fieldName) => {
     syncValueLabels();
     flushQueuedSettings().catch((error) => {
       logWarning(`Failed to save setting change for ${fieldName}.`, error);
-      showTransientError("Could not save settings.");
+      showTransientError(t("errorCouldNotSaveSettings"));
     });
   });
 });
@@ -536,11 +557,13 @@ chrome.runtime.onMessage.addListener((message) => {
     renderState();
   }
   if (message?.type === "offscreen:error") {
-    currentState = { ...currentState, running: false, lastError: message.payload?.error || "Audio processing error" };
+    currentState = { ...currentState, running: false, lastError: message.payload?.error || t("errorAudioProcessing") };
     renderState();
     scheduleTransientStatusReset();
   }
 });
+
+applyI18n();
 
 try {
   await loadStoredSettings();
