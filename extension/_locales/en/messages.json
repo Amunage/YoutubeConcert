@@ -74,7 +74,7 @@
   "hintTailGainScale": { "message": "Raises or lowers the overall reverb tail energy after the room preset is chosen." },
   "hintReflectionSpacing": { "message": "Widens or compresses the timing gap between reflection taps for a tighter or larger wall feel." },
   "hintDynamicWetTrimStrength": { "message": "Changes how aggressively the adaptive wet system pulls reverb back when the source gets dense." },
-  "hintExperimentalLargeSpaceModulation": { "message": "Adds subtle motion to large-room tails so arena and stadium presets feel less static." },
+  "hintExperimentalLargeSpaceModulation": { "message": "Adds subtle tail motion plus a very slow listener-like sway. Stronger in bigger spaces and lighter in smaller ones." },
   "hintExperimentalSubtleSpaceResponse": { "message": "Adds a faint bloom behind the late tail to make large spaces feel less empty." },
   "hintExperimentalCrowdReaction": { "message": "Adds a low-level crowd-air bed behind the reverb for a stronger live venue impression." }
 }

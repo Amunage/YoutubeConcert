@@ -84,6 +84,27 @@ const PARTIAL_UPDATE_KEYS = [
 export function canUpdateLiveConcertGraphInPlace(graph, previousSettings, nextSettings) {
   const prev = withDefaults(previousSettings);
   const next = withDefaults(nextSettings);
+  const prevActiveTrackCount = buildLayerComputationCache(
+    clamp(prev.cloneCount, 1, 8),
+    prev.ensembleVolume,
+    prev.volumeDecay,
+    prev.reverbIntensity,
+    prev.peakSuppression,
+    prev.audiencePosition,
+    buildRoomSettings(prev),
+  ).activeTrackCount;
+  const nextActiveTrackCount = buildLayerComputationCache(
+    clamp(next.cloneCount, 1, 8),
+    next.ensembleVolume,
+    next.volumeDecay,
+    next.reverbIntensity,
+    next.peakSuppression,
+    next.audiencePosition,
+    buildRoomSettings(next),
+  ).activeTrackCount;
+  if (prevActiveTrackCount !== nextActiveTrackCount) {
+    return false;
+  }
   const partialKeys = new Set(PARTIAL_UPDATE_KEYS);
   const canReuseDiffusionBus = Boolean(graph?.hasDiffusionBus);
   const canReuseAuxiliaryBuses = Boolean(graph?.hasSmearBus || graph?.hasBlurBus || graph?.hasReflectionBus);
@@ -101,10 +122,6 @@ export function createLiveConcertGraph(context, settings) {
   const safe = withDefaults(settings);
   const room = buildRoomSettings(safe);
   const audience = buildAudienceSettings(safe);
-  const trackCount = clamp(safe.cloneCount, 1, 8);
-  const outputLevel = getOutputLevel(safe);
-  const originalMix = getOriginalMixLevel(safe);
-  const complexity = getComplexityProfile(trackCount, safe.roomPreset, safe.audiencePreset, safe.reverbIntensity);
   const lateBusVariants = [];
   if (safe.experimentalSubtleSpaceResponse && (safe.roomPreset === "arena" || safe.roomPreset === "stadium")) {
     lateBusVariants.push("subtle-space-response");
@@ -118,7 +135,7 @@ export function createLiveConcertGraph(context, settings) {
   const lateBusVariantKey = lateBusVariants.length ? lateBusVariants.join("+") : "base";
   const localNodes = [];
   const layerCache = buildLayerComputationCache(
-    trackCount,
+    clamp(safe.cloneCount, 1, 8),
     safe.ensembleVolume,
     safe.volumeDecay,
     safe.reverbIntensity,
@@ -126,6 +143,10 @@ export function createLiveConcertGraph(context, settings) {
     safe.audiencePosition,
     room,
   );
+  const trackCount = layerCache.activeTrackCount || 1;
+  const outputLevel = getOutputLevel(safe);
+  const originalMix = getOriginalMixLevel(safe);
+  const complexity = getComplexityProfile(trackCount, safe.roomPreset, safe.audiencePreset, safe.reverbIntensity);
   const layerVariationCache = buildLayerVariationCache("live", trackCount, safe.roomPreset, safe.audiencePreset);
 
   const input = context.createGain();
@@ -300,12 +321,8 @@ export function updateLiveConcertGraph(context, graph, settings) {
   const safe = withDefaults(settings);
   const room = buildRoomSettings(safe);
   const audience = buildAudienceSettings(safe);
-  const trackCount = clamp(safe.cloneCount, 1, 8);
-  const outputLevel = getOutputLevel(safe);
-  const originalMix = getOriginalMixLevel(safe);
-  const complexity = getComplexityProfile(trackCount, safe.roomPreset, safe.audiencePreset, safe.reverbIntensity);
   const layerCache = buildLayerComputationCache(
-    trackCount,
+    clamp(safe.cloneCount, 1, 8),
     safe.ensembleVolume,
     safe.volumeDecay,
     safe.reverbIntensity,
@@ -313,6 +330,10 @@ export function updateLiveConcertGraph(context, graph, settings) {
     safe.audiencePosition,
     room,
   );
+  const trackCount = layerCache.activeTrackCount || 1;
+  const outputLevel = getOutputLevel(safe);
+  const originalMix = getOriginalMixLevel(safe);
+  const complexity = getComplexityProfile(trackCount, safe.roomPreset, safe.audiencePreset, safe.reverbIntensity);
   const adaptiveWetCache = buildLayerAdaptiveWetCache({
     room,
     audience,

@@ -9,6 +9,10 @@ import {
 } from "./effects.js";
 import { getAudienceWidthProfile, getCenterImageProfile } from "./layer-utils.js";
 
+function getTrackVolumeCutoff(baseVolume) {
+  return clamp(baseVolume, 0, 100) * 0.05;
+}
+
 export function computeLayerState({
   room,
   audience,
@@ -280,7 +284,9 @@ export function buildLayerVariationCache(variationSeedBase, trackCount, roomPres
 export function buildLayerComputationCache(trackCount, baseVolume, volumeDecay, reverbIntensity, peakSuppression, audiencePosition, room = null) {
   const totalTracks = Math.max(1, trackCount || 1);
   const adjustedVolumeDecay = clamp(volumeDecay + (room?.layerDecayBias ?? 0), 0, 100);
+  const trackVolumeCutoff = getTrackVolumeCutoff(baseVolume);
   const cache = {
+    activeTrackCount: 0,
     layerBlends: [],
     trackVolumes: [],
     audienceTracks: [],
@@ -297,6 +303,10 @@ export function buildLayerComputationCache(trackCount, baseVolume, volumeDecay, 
     cache.audienceTracks.push(audienceTrack);
     cache.reverbStrengths.push(clamp(getTrackEffectStrength(reverbIntensity, index) + audienceTrack.reverbExtra, 0, 100));
     cache.suppressionStrengths.push(clamp(getTrackEffectStrength(peakSuppression, index) + audienceTrack.suppressionExtra, 0, 100));
+    cache.activeTrackCount += 1;
+    if (index > 0 && trackVolume <= trackVolumeCutoff) {
+      break;
+    }
   }
 
   return cache;

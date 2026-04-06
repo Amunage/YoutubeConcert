@@ -1,4 +1,5 @@
 import { clamp, dbToGain, getConvolverBuffer } from "./effects.js";
+import { buildAudienceMotionChain } from "./experimental/audience-motion.js";
 import { buildCrowdReactionChain } from "./experimental/crowd-reaction.js";
 import { buildLargeSpaceMicroModulationChain } from "./experimental/large-space-modulation.js";
 import { buildSubtleSpaceResponseChain } from "./experimental/subtle-space-response.js";
@@ -325,11 +326,14 @@ export function createEffectBus(kind, busKey, options = {}, context) {
       kind === "late" &&
       options.experimentalCrowdReaction === true &&
       (options.roomPreset === "arena" || options.roomPreset === "stadium");
+    const enableAudienceMotion =
+      kind === "late" &&
+      options.experimentalLargeSpaceModulation === true;
 
-    if (enableLargeSpaceMicroModulation || enableSubtleSpaceResponse || enableCrowdReaction) {
+    if (enableLargeSpaceMicroModulation || enableSubtleSpaceResponse || enableCrowdReaction || enableAudienceMotion) {
       let experimentalInput = wetPresenceDip;
       if (enableCrowdReaction) {
-        const crowdReactionTarget = (enableSubtleSpaceResponse || enableLargeSpaceMicroModulation) ? context.createGain() : returnGain;
+        const crowdReactionTarget = (enableSubtleSpaceResponse || enableLargeSpaceMicroModulation || enableAudienceMotion) ? context.createGain() : returnGain;
         nodes.push(crowdReactionTarget);
         nodes.push(
           ...buildCrowdReactionChain(
@@ -345,7 +349,7 @@ export function createEffectBus(kind, busKey, options = {}, context) {
         experimentalInput = crowdReactionTarget;
       }
       if (enableSubtleSpaceResponse) {
-        const spaceResponseTarget = enableLargeSpaceMicroModulation ? context.createGain() : returnGain;
+        const spaceResponseTarget = (enableLargeSpaceMicroModulation || enableAudienceMotion) ? context.createGain() : returnGain;
         nodes.push(spaceResponseTarget);
         nodes.push(
           ...buildSubtleSpaceResponseChain(
@@ -356,6 +360,22 @@ export function createEffectBus(kind, busKey, options = {}, context) {
           ),
         );
         experimentalInput = spaceResponseTarget;
+      }
+      if (enableAudienceMotion) {
+        const audienceMotionTarget = enableLargeSpaceMicroModulation ? context.createGain() : returnGain;
+        nodes.push(audienceMotionTarget);
+        nodes.push(
+          ...buildAudienceMotionChain(
+            experimentalInput,
+            audienceMotionTarget,
+            context,
+            {
+              roomPreset: options.roomPreset,
+              audiencePreset: options.audiencePreset,
+            },
+          ),
+        );
+        experimentalInput = audienceMotionTarget;
       }
 
       if (enableLargeSpaceMicroModulation) {
